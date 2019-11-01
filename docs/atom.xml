@@ -1,0 +1,497 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>ICE.GS</title>
+  
+  
+  <link href="/atom.xml" rel="self"/>
+  
+  <link href="https://ice.gs/"/>
+  <updated>2019-03-24T14:15:03.369Z</updated>
+  <id>https://ice.gs/</id>
+  
+  <author>
+    <name>GGICE</name>
+    
+  </author>
+  
+  <generator uri="http://hexo.io/">Hexo</generator>
+  
+  <entry>
+    <title>Web push 浏览器推送</title>
+    <link href="https://ice.gs/2019/03/17/web-push/"/>
+    <id>https://ice.gs/2019/03/17/web-push/</id>
+    <published>2019-03-17T13:20:42.000Z</published>
+    <updated>2019-03-24T14:15:03.369Z</updated>
+    
+    <content type="html"><![CDATA[<p>Web push 是PWA的关键技术之一，最近详细了解了一下 Web push 的原理及实现。</p><h2 id="原理"><a href="#原理" class="headerlink" title="原理"></a>原理</h2><p>借用W3C Push api文档上的一张图：</p><p><img src="/images/2019/web-push/sequence_diagram.png" alt></p><p>上图中的 web page、serice worker、user agent 为浏览器端；浏览器端和push service之间的连接基于 <a href="https://developers.google.com/web/fundamentals/push-notifications/web-push-protocol?spm=ucplus.11213647.0.0.12df6fe7phMPnU" target="_blank" rel="noopener">Web Push Protocal</a> 实现，由浏览器厂商自行实现，比如Chrome使用的<a href="https://firebase.google.com/docs/cloud-messaging/concept-options?hl=zh-cn" target="_blank" rel="noopener">FCM</a>作为push service 所以注定在国内无法使用；application server 就是我们自己业务的服务，用于通知触发FCM给浏览器发送推送消息，这是唯一业务开发者可以参与的部分。</p><h2 id="实现"><a href="#实现" class="headerlink" title="实现"></a>实现</h2><h3 id="业务服务端-application-server"><a href="#业务服务端-application-server" class="headerlink" title="业务服务端 (application server)"></a>业务服务端 (application server)</h3><p>服务端的实现借助 Node.js <a href="https://github.com/web-push-libs/web-push#readme" target="_blank" rel="noopener">web-push</a> SDK 来做，因为<a href="https://developers.google.com/web/fundamentals/push-notifications/web-push-protocol?spm=ucplus.11213647.0.0.12df6fe7phMPnU" target="_blank" rel="noopener">Web Push Protocal</a> 还是很复杂的，该SDK帮我们处理了复杂的协议，我们只需要轻松调用即可。</p><pre><code class="javascript">const webpush = require(&#39;web-push&#39;)const Koa = require(&#39;koa&#39;)const cors = require(&#39;@koa/cors&#39;)const Router = require(&#39;koa-router&#39;)const koaBody = require(&#39;koa-body&#39;)const { publicVapidKey, privateVapidKey } = require(&#39;./key&#39;)  // 钥匙对通过命令下 web-push generate-vapid-keys 来生成，是 web push 协议的一部分，这里提供简单的方法供我们生成const app = new Koa()const router = new Router()let subscription// 设置 VAPID , 这里用到的 VAPID 规范，用于Push service 通过该规范来做身份验证webpush.setVapidDetails(&#39;mailto:i@ice.gs&#39;, publicVapidKey, privateVapidKey);// 启动 http 服务器app.use(cors())  .use(koaBody())  .use(router.routes())  .use(router.allowedMethods())// 浏览器端通过该接口上传，订阅信息 subscriptionrouter.post(&#39;/subscribe&#39;, (ctx, next) =&gt; {  console.log(&#39;ctx&#39;, ctx)  subscription = ctx.request.body  ctx.response.status = 200  ctx.body = subscription});// 调用该接口即发送消息，依赖上一步得到 subscription，触发通知 Push service 给浏览器发送推送router.get(&#39;/push&#39;, async (ctx, next) =&gt; {   ctx.body = await webpush.sendNotification(subscription, JSON.stringify({ title: &#39;test&#39; }))});app.listen(3000);</code></pre><h3 id="浏览器端"><a href="#浏览器端" class="headerlink" title="浏览器端"></a>浏览器端</h3><p>index.html</p><p>注意，访问该页面，需要 https ，可以自行本地搭建一个 https 的静态服务器</p><pre><code class="html">&lt;!DOCTYPE html&gt;&lt;html lang=&quot;en&quot;&gt;&lt;head&gt;  &lt;meta charset=&quot;UTF-8&quot;&gt;  &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1.0&quot;&gt;  &lt;meta http-equiv=&quot;X-UA-Compatible&quot; content=&quot;ie=edge&quot;&gt;  &lt;title&gt;Document&lt;/title&gt;&lt;/head&gt;&lt;body&gt;  &lt;script src=&quot;./client.js&quot;&gt;&lt;/script&gt;&lt;/body&gt;&lt;/html&gt;</code></pre><p>client.js</p><p>推送的订阅和订阅信息上传到 application server，在 client.js 中进行</p><pre><code class="javascript">// 将字符串转换成 Uint8Array 的方法function urlBase64ToUint8Array(base64String) {  const padding = &#39;=&#39;.repeat((4 - base64String.length % 4) % 4);  const base64 = (base64String + padding)    .replace(/-/g, &#39;+&#39;)    .replace(/_/g, &#39;/&#39;);  const rawData = window.atob(base64);  const outputArray = new Uint8Array(rawData.length);  for (let i = 0; i &lt; rawData.length; ++i) {    outputArray[i] = rawData.charCodeAt(i);  }  return outputArray;}// 这里的 publicVapidKey， 就是上文application server端生成的 publicVapidKeyconst publicVapidKey = &#39;BEARBIG3egr2oiv2MVr_UzfxI3GdbVi5w1SOg6hlvAbwlbjdbjEenOVVlIPva8HOe&#39;;if (&#39;serviceWorker&#39; in navigator) {  console.log(&#39;Registering service worker&#39;);  run().catch(error =&gt; console.error(error));}async function run() {  console.log(&#39;Registering service worker&#39;);  // 注册 service worker  const registration = await navigator.serviceWorker.    register(&#39;/code/cu-web-push/browser/worker.js&#39;, {scope: &#39;/code/cu-web-push/browser/&#39;});  console.log(&#39;Registered service worker&#39;);  console.log(&#39;Registering push&#39;);  // 通过浏览器API注册消息订阅  const subscription = await registration.pushManager.    subscribe({      userVisibleOnly: true,      applicationServerKey: urlBase64ToUint8Array(publicVapidKey)    });  console.log(&#39;subscription&#39;, subscription)  console.log(&#39;Registered push&#39;);  console.log(&#39;Sending push&#39;);  // 注册完成后，将注册信息提交给 application server  // 之后请求调用 http://127.0.0.1:3000/push 浏览器端即可收到消息推送  await fetch(&#39;http://127.0.0.1:3000/subscribe&#39;, {    method: &#39;POST&#39;,    body: JSON.stringify(subscription),    headers: {      &#39;content-type&#39;: &#39;application/json&#39;    }  });}</code></pre><p>worker.js</p><p>监听 push service 发送消息到浏览器和发送系统通知，通过 service worker 来实现</p><pre><code class="javascript">console.log(&#39;Loaded service worker!&#39;);// 监听 `push` 来获取 push service 发来的推送self.addEventListener(&#39;push&#39;, ev =&gt; {  const data = ev.data.json();  console.log(&#39;Got push&#39;, data);  // 收到推送，调用 Notification 接口，发送系统通知  self.registration.showNotification(data.title, {    body: &#39;Hello, World!&#39;,    icon: &#39;&#39;  });});</code></pre><h2 id="兼容性"><a href="#兼容性" class="headerlink" title="兼容性"></a>兼容性</h2><p>目前兼容性并不乐观，可以在 caniuse 查看兼容情况，大体上只有 Android端和PC端的 Chrome、Firefox 支持，IOS端和Safari不支持。而且Chrome 国内无法使用，无解。</p><h2 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h2><ul><li><a href="https://developers.google.com/web/fundamentals/push-notifications/" target="_blank" rel="noopener">Web Push Notifications</a></li><li><a href="https://dev.ucweb.com/docs/pwa/docs-zh/qo27fv?spm=ucplus.11213647.toc.5.7bfa4ed0LgjJ5O" target="_blank" rel="noopener">Web Push 介绍</a></li><li><a href="https://tools.ietf.org/html/draft-ietf-webpush-protocol-12" target="_blank" rel="noopener">Web Push Protocal</a></li><li><a href="https://www.w3.org/TR/push-api/" target="_blank" rel="noopener">Push api</a></li><li><a href="https://github.com/web-push-libs/web-push#readme" target="_blank" rel="noopener">Web Push Node.js SDK</a></li></ul>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;p&gt;Web push 是PWA的关键技术之一，最近详细了解了一下 Web push 的原理及实现。&lt;/p&gt;&lt;h2 id=&quot;原理&quot;&gt;&lt;a href=&quot;#原理&quot; class=&quot;headerlink&quot; title=&quot;原理&quot;&gt;&lt;/a&gt;原理&lt;/h2&gt;&lt;p&gt;借用W3C Push api文档
+      
+    
+    </summary>
+    
+    
+      <category term="web development" scheme="https://ice.gs/tags/web-development/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>关于小程序的思考</title>
+    <link href="https://ice.gs/2019/03/16/about-mini-app/"/>
+    <id>https://ice.gs/2019/03/16/about-mini-app/</id>
+    <published>2019-03-16T07:15:50.000Z</published>
+    <updated>2019-03-24T06:59:58.973Z</updated>
+    
+    <content type="html"><![CDATA[<p>最近的做的一些项目和各种国内小程序有关，把国内主流的小程序（微信、百度、头条、快应用、支付宝）都体验一遍，自己有一些感想。</p><h2 id="小程序降低了开发门槛？"><a href="#小程序降低了开发门槛？" class="headerlink" title="小程序降低了开发门槛？"></a>小程序降低了开发门槛？</h2><p>记得在微信小程序刚出来时，标榜的优势之一就是降低开发门槛，一个产品经理即可完成开发。但是作为一个职业前端开发，对这些并不能苟同，有以下一些原因：</p><ul><li>API 设计不合理。远远达不到 W3C API 设计的能力，而且和 W3C 标准不同；甚至有些API的设计相当原始，已经远远跟不上现代JS语言；对开发者来说带来的是困惑和使用成本；</li><li>开发工具不稳定，开发调试并不简单。微信小程序算是比较成熟的，IDE开发调试还算能用，但是其他小程序照本搬抄，草草做个IDE就给开发者用，连基本的可用都达不到，更别提开发体验了。这里最气愤的是快应用，个人觉得快应用的想法是很好的，但是开发体验做的相当差。差到气愤！</li></ul><h2 id="小程序降低了研发成本？"><a href="#小程序降低了研发成本？" class="headerlink" title="小程序降低了研发成本？"></a>小程序降低了研发成本？</h2><p>小程序出来之前，我们需要开发一个产品的三端，现在我们需要开发四端，甚至七端、八端的。无疑需要更多的人力投入。</p><h2 id="小程序提升了体验？"><a href="#小程序提升了体验？" class="headerlink" title="小程序提升了体验？"></a>小程序提升了体验？</h2><p>在功能上小程序一般比 H5版本的功能少，更别提和Native 应用比较。在性能上并不觉得比H5好多少，但是在启动速度上感觉比H5更慢。个人觉得综合下来小程序的体验还不如 H5，下面会继续探讨这个问题。</p><h2 id="大家为什么还开发小程序？"><a href="#大家为什么还开发小程序？" class="headerlink" title="大家为什么还开发小程序？"></a>大家为什么还开发小程序？</h2><p>为了流量，诸如以上提出的那么多问题，但是很多公司、人都还要开发小程序，当然有最现实的原因，为了通过小程序平台来作为流量入口。</p><h2 id="我认为的未来？"><a href="#我认为的未来？" class="headerlink" title="我认为的未来？"></a>我认为的未来？</h2><p>从一些声音中听到，有人认为小程序是未来，有人甚至想把小程序方案提交到WEB标准中。我觉得小程序不管对于开发者、用户都是没有好处，唯一好处是商业公司通过这种方式短暂获取流量，获取短暂的利益（长期来讲，如果小程序成为了一个公司产品的主要入口，进而变成被国内某家公司控制）。</p><p>个人觉得小程序方案，应该随着时间和技术的推进，被埋没在历史的长河中。</p><p>PWA，我一直觉得PWA才是未来移动端、PC端应用开发的主流方案，虽然WEB标准也主要由主要几家公司主导，但是相对来说是集体的智慧，是更加理想和良好的设计。觉得PWA技术是未来的原因有以下几点：</p><ul><li>Web 性能就目前而言，已经不再比Native差，还是说 VSCode 就是个很好的例子。而且随着浏览器优化和性能的提升未来Web性能会更加优秀。目前出现 Weex、Fluter 方案，用Native渲染来提升性能，但是浏览器在未来也可能达到Native渲染的性能、能力，我们就根本不需要这些中间方案。</li><li>能力，诸如通知推送、离线等能力 PWA应用已经具备，可以基本达到Native同等能力</li><li>标准，PWA是Web标准，只有成为标准的东西，才可能被延续使用。PWA技术只是Web标准的一种延伸，并不会对开发、调试等等带来额外的成本</li></ul><p>为什么PWA应用没有普及？</p><p>在国外PWA应用已经得到广泛的应用，PWA技术的主要推动者是 Google，但是Google服务无法再国内使用，比如推送能力，国内就无法使用；用户使用习惯养成后难以改变，国内目前用户习惯为APP为主，PWA并没有成为一种习惯，甚至大部分普通用户重来没有用过也不知道PWA是什么，这个需要时间和契机来改变。</p><p>尽管这些，我依然觉得PWA是未来，并想为推动PWA的发展做出努力！</p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;p&gt;最近的做的一些项目和各种国内小程序有关，把国内主流的小程序（微信、百度、头条、快应用、支付宝）都体验一遍，自己有一些感想。&lt;/p&gt;&lt;h2 id=&quot;小程序降低了开发门槛？&quot;&gt;&lt;a href=&quot;#小程序降低了开发门槛？&quot; class=&quot;headerlink&quot; title=&quot;小程
+      
+    
+    </summary>
+    
+    
+      <category term="web development" scheme="https://ice.gs/tags/web-development/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>对编写JavaScript代码的理解</title>
+    <link href="https://ice.gs/2018/11/27/%08How-to-write-JavaScript/"/>
+    <id>https://ice.gs/2018/11/27/How-to-write-JavaScript/</id>
+    <published>2018-11-27T13:21:25.000Z</published>
+    <updated>2019-03-16T06:17:29.335Z</updated>
+    
+    <content type="html"><![CDATA[<h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>从14年7月开始从事前端开发至今已经有4年多的时间，从入行的很长时间里，觉得自己都还没入门。直到最近的某个时间回想，觉得现在的自己可能算是入门了。</p><p>期间参与过多家互联网（科技）公司的前端开发工作，经历过10w+ JavaScript 项目的洗礼，修过一年的BUG、写过富文本编辑器、WebAPP、Hybird APP、JS库等等，也和很多个前端开发者合作过，查阅学习过很多人的代码。其实目前得到的结论是，由于JavaScript的入门门槛过低（自己也是因为这个原因入行），导致JavaScript的代码质量普遍偏低。所以想用自己的入门经验来给那些从事JavaScript开发，但是尚未入门的人一些经验的分享。</p><p>大多为个人实践的思考和总结，可能也会存在一些理解偏差和差异，希望可以指正。</p><h2 id="如何评判代码质量"><a href="#如何评判代码质量" class="headerlink" title="如何评判代码质量"></a>如何评判代码质量</h2><p>可能一直以来代码质量都是一个虚的表述，没有可以遵循的标准来衡量一份代码的质量。但是在实践中我们会得到一些依据。</p><ul><li>是否可维护</li><li>是否易扩展</li><li>是否易重构</li><li>是否边界异常情况处理的到位</li><li>是否优化了性能、运行是否高效、内存是否有效管理和占用</li><li>是否单元测试覆盖，及高覆盖率</li></ul><h2 id="编程原则"><a href="#编程原则" class="headerlink" title="编程原则"></a>编程原则</h2><ul><li>复用：最大化的复用，而不是Copy相同的代码，保证极低的代码重复率</li><li>模块（组件）化：问题分解，把大的问题，分成若干个小问题去处理，保证一个函数（类）只做一件事的原则，降低复杂度</li><li>数据操作分离（松耦合）：每个类（函数）都是一个独立的机器，注入数据得到实例或得出结果，不依赖任何外部状态</li><li>注重运行效率：保证代码以较高的效率运行，并持续优化</li></ul><h2 id="编程方法"><a href="#编程方法" class="headerlink" title="编程方法"></a>编程方法</h2><p>在目前的大多数实践中，是以类的继承的<strong>面向对象编程</strong>为基础加上<strong>函数式编程</strong>来构成整个项目。</p><h3 id="继承"><a href="#继承" class="headerlink" title="继承"></a>继承</h3><p>其实不管是ES6的Class概念出现之前还是之后，JavaScipt 大型工程的继承大多都是基于类的概念来实现，Class的出现，使我们可以更加显式的使用类，即面向对象的编程的思想来实现继承。</p><h3 id="复用"><a href="#复用" class="headerlink" title="复用"></a>复用</h3><p>类用处在于继承，而函数则是复用。当一个函数被考虑要复用的话，就需要把这个函数写成一个无状态的纯函数，自身只接收数据，然后返回新的数据。只是一个处理数据的机器</p><h3 id="封装"><a href="#封装" class="headerlink" title="封装"></a>封装</h3><p>即将常用的多个逻辑语句（或者函数）封装为一个公用函数或者一个公共的类，提供方便的调用方式，这样可以更好的复用，降低重复率，对提高可维护性有重要意义。（这里所说的封装仅仅是一种描述形式，有别于传统编程语言中的封装概念）</p><h3 id="依赖注入"><a href="#依赖注入" class="headerlink" title="依赖注入"></a>依赖注入</h3><p>依赖注入的思想在<code>Angular</code>、<code>Vscode</code> 中被广泛使用，将运行时的依赖通过参数的形式注入进实例中，这种方式有点类似函数式编程，可以保持实例的松耦合，每个实例都是一个独立的机器，会使得逻辑清晰，依赖清晰，利于维护。</p><h3 id="内存管理"><a href="#内存管理" class="headerlink" title="内存管理"></a>内存管理</h3><p>虽然JavaScript的引擎都有内存回收机制，但是想要控制良好的内存占用，必须手动来管理内存（VSCode 就是个很好的例子），主动的来清理和消除不必要的内存暂用，可以对整个JavaScript的性能和运行效率有很好的提升。</p><p>比如一些异步方法、定时器、大的数据量变量等，我们必须根据使用逻辑来主动销毁，否则就会带来问题和不必要的内存占用。</p><h3 id="执行效率"><a href="#执行效率" class="headerlink" title="执行效率"></a>执行效率</h3><p>其实我们在写每一段代码时，都需要去思考和考量这段代码是否高效。考虑如何降低时间复杂度、如何通过最短路径求解、是否可应对极端情况、是否可以分场景提高运行效率</p><h2 id="代码保障"><a href="#代码保障" class="headerlink" title="代码保障"></a>代码保障</h2><p>其实有一些现实案例值得我们思考，为什么普遍IOS应用比Android应用质量（指的运行效率、稳定性、BUG量等）高，为什么React写出的代码容易维护、重构、拓展。其实我们从人的这一方面来保障代码的质量是不可靠的，必须上升到工具方面、底层框架设计方面、系统层面，才是靠谱有效的保障。</p><h3 id="Typescript"><a href="#Typescript" class="headerlink" title="Typescript"></a>Typescript</h3><p>目前JS还没有较好的底层框架、系统层面的保障。其中Typescript算是一种目前比较好的从语言层面的保障。“Javascript 不适合编写大型项目”，而Typescript 使得 JavaScript 可以编写大型项目。</p><h3 id="JSLint、TSLint、ESLint"><a href="#JSLint、TSLint、ESLint" class="headerlink" title="JSLint、TSLint、ESLint"></a>JSLint、TSLint、ESLint</h3><p>这些 Lint 一方面可以规范代码样式，另一方可以规范一些逻辑，对代码质量起到基础保障的作用，建议项目均开启基础的Lint规则，也可以参照业内成熟的规则范例。</p><h3 id="单元测试-自动化测试"><a href="#单元测试-自动化测试" class="headerlink" title="单元测试 自动化测试"></a>单元测试 自动化测试</h3><p>当项目足够庞大复杂时，单元测试是必不可少的，否则在维护迭代中，很难保证代码修改后整个项目的稳定性。自动化测试有时候和项目的运行模式、依赖等有关不容易实现，但是自动化测试如果实现了，将会是更好的一层保障，基本可以保证可用性和稳定性交付。</p><h3 id="保持头脑清醒"><a href="#保持头脑清醒" class="headerlink" title="保持头脑清醒"></a>保持头脑清醒</h3><p>一般低级错误和BUG都是在自己头脑不清醒的时候产生的。比如一直加班到12点，头脑浑噩的准备最后提交一次代码，赶紧回家睡觉的时候；比如上线后的紧急修复线上BUG的时候。在紧张或者困乏头脑不清醒的时候写出来的代码是最容易携带问题进去的。所以我们要时刻保持清醒和镇定，如果无法镇定下来，可以暂时停止，找个自己可以调整的方式，短暂的调整之后再重新进入编码。</p><h3 id="Code-review"><a href="#Code-review" class="headerlink" title="Code review"></a>Code review</h3><p>刚开始对Code review 是拒绝的，自己的代码被别人说三道四终归还是不爽，经常和Review者“干”起来，好多GitHub上的Pull request 也会经常看到两个人“干”起来。一味地“蛮干”是完全没有意义而且浪费时间的，拿证据、摆事实、讲道理说服对方或者接受对方的意见才是正确的做法。</p><p>当你遇到一个负责任的Review者的时候，会帮你规避很多BUG，比如逻辑错误、不严谨、误用等等被自己忽略的问题，可能也会学到一些编码技巧、编码规范， 这个过程其实也是开发者间交流成长的一个契机。一旦尝到甜头，之后你会需要甚至依赖Code Review。</p><h2 id="一些想法"><a href="#一些想法" class="headerlink" title="一些想法"></a>一些想法</h2><h3 id="沟通"><a href="#沟通" class="headerlink" title="沟通"></a>沟通</h3><p>实际开发中沟通可能会占据大量的时间，个人觉得沟通需要遵循这样的原则，优先在线非实时沟通（gitlab issue commit 等）其次邮件通信工具沟通，最后才是面对面沟通。</p><p>面对面沟通其实很容易造成低效，而且会粗暴打断对方节奏，不是必须应尽量避免当面沟通。线上沟通更容易让自己深入思考，理清思路，突出需要沟通问题，往往有些时候在你梳理问题的时候，自己就把问题解决了，而无需去沟通。</p><p>非当面沟通的一个好处就是不易打断对方，所以在充分分析自己的问题之后，言简意赅的将自己问题发给对方，并给对方一定的处理时间，不要一味的催促，才是比较好的方式。</p><p>前端开发者有个比较常见的沟通场景，和后端联调接口。这个场景比较科学的实施应该是这样的：</p><ul><li>前后端其中一方书写接口文档，另一方Review确认</li><li>前端后端分别开发，Mock数据或Mock请求，双方只对文档负责，相互无任何其他依赖</li><li>前后端均开发完成，将Mock接口切回测试环境接口，做回归</li><li>对回归测试出的少量的异常，前后端做简单沟通即可</li></ul><p>其实在这个场景中前端需要沟通的东西是不多的，但是在实践中会发现好多开发者的大量时间浪费这上面。</p><p>沟通的态度也是很重要的，多用敬语、多谦让和理解、对人友善才会得到友善对待。</p><h3 id="注释"><a href="#注释" class="headerlink" title="注释"></a>注释</h3><p>曾经看到过这样一句话，大意是“好的命名，可以减少注释”。还是比较认同这句话，首先我们注重变量、函数、类的命名，减少不必要注释。只在难以理解的逻辑和特殊处理的逻辑处写少量的注释。只写必要注释，注释太多影响整个代码的可读性，而且如果注释没得到有效维护，在逻辑变更后反而引起了误解。</p><h3 id="文档"><a href="#文档" class="headerlink" title="文档"></a>文档</h3><p>文档应该是代码最好的伙伴，文档可以极大的降低沟通成本、维护成本并且可以帮助梳理思路等等。</p><h3 id="编程理解"><a href="#编程理解" class="headerlink" title="编程理解"></a>编程理解</h3><ul><li><p>当发现一个自己参与的项目，可以轻松的定位问题，轻松的重构、轻松的拓展，这个时候就可以享受编程的过程，把更多的精力花费在算法优化、工程优化上。</p></li><li><p>代码写到最后，会发现自己只是在写声明配置文件而已。将函数或者类定义，然后定义参数，然后串联起来，然后实现函数或类的细节，仅此而已。</p></li><li>代码质量是受个人性格、当时状态影响的。道理都懂，就是时间赶任务重，而做不到。所以我们要在平时养成良好的习惯，这样即便在高压状态下也会基本按照好的习惯来编码。好的编码习惯绝对是节省时间而不是浪费时间。</li><li>编码期间，不要试图通过不断的试错来解决自己不了解的问题，所有的不了解最终都会回归到交付期的BUG。自己挖的坑，还是自己进。所以一定要对编码的周边API、环境、用法等做的十分的熟悉，不留盲点。</li></ul>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;h2 id=&quot;前言&quot;&gt;&lt;a href=&quot;#前言&quot; class=&quot;headerlink&quot; title=&quot;前言&quot;&gt;&lt;/a&gt;前言&lt;/h2&gt;&lt;p&gt;从14年7月开始从事前端开发至今已经有4年多的时间，从入行的很长时间里，觉得自己都还没入门。直到最近的某个时间回想，觉得现在的自己可能算是入
+      
+    
+    </summary>
+    
+    
+      <category term="web development" scheme="https://ice.gs/tags/web-development/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>本地开发启用HTTPS</title>
+    <link href="https://ice.gs/2018/11/22/%E6%9C%AC%E5%9C%B0%E5%BC%80%E5%8F%91%E5%90%AF%E7%94%A8https/"/>
+    <id>https://ice.gs/2018/11/22/本地开发启用https/</id>
+    <published>2018-11-22T15:19:09.000Z</published>
+    <updated>2019-03-16T06:17:29.341Z</updated>
+    
+    <content type="html"><![CDATA[<p>现在众多网站或者浏览器的API都需要启用HTTPS，本地如果无法启用HTTPS就会有诸多开发的不便。</p><p>其实本地开发启用HTTPS只需要简单几步就可以搞定：</p><h2 id="生成加密证书对"><a href="#生成加密证书对" class="headerlink" title="生成加密证书对"></a>生成加密证书对</h2><p>执行以下命令</p><pre><code class="shell">openssl req -x509 -out localhost.crt -keyout localhost.key \  -newkey rsa:2048 -nodes -sha256 \  -subj &#39;/CN=localhost&#39; -extensions EXT -config &lt;( \   printf &quot;[dn]\nCN=localhost\n[req]\ndistinguished_name = dn\n[EXT]\nsubjectAltName=DNS:localhost\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth&quot;)</code></pre><p>其中的 <code>DNS:localhost</code> 字段中的<code>localhost</code>替换成通过host绑定到 <code>127.0.0.1</code> 的任意域名比如我们在host中设置了</p><pre><code># My hosts127.0.0.1 dev.dev</code></pre><p>那么就可以为<code>dev.dev</code> 这域名设置证书</p><pre><code>openssl req -x509 -out localhost.crt -keyout localhost.key \  -newkey rsa:2048 -nodes -sha256 \  -subj &#39;/CN=localhost&#39; -extensions EXT -config &lt;( \   printf &quot;[dn]\nCN=localhost\n[req]\ndistinguished_name = dn\n[EXT]\nsubjectAltName=DNS:dev.dev\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth&quot;)</code></pre><h2 id="信任证书"><a href="#信任证书" class="headerlink" title="信任证书"></a>信任证书</h2><p>命令执行完就会生成<code>localhost.crt</code> <code>localhost.key</code>，双击 <code>localhost.crt</code> 就会在<code>钥匙串</code> 中打开，选择导入证书（Mac OS 10.13 中会提示选择导入证书，10.14会直接导入），找到名为<code>localhost</code>的已导入证书后，设置信任，如下图</p><p><img src="/images/2018/11/https-crt.png" alt></p><h2 id="启用相应的服务器"><a href="#启用相应的服务器" class="headerlink" title="启用相应的服务器"></a>启用相应的服务器</h2><p>以用<code>http-server</code>启动静态服务器为例</p><pre><code>sudo http-server -S -K localhost.key -C localhost.crt -p 443</code></pre><p>启动成功后用Chrome、Safari浏览器访问即可看到如下效果，Firefox 有点任性，访问起来还是会提示不安全。</p><p><img src="/images/2018/11/https-open.png" alt></p><h2 id="参考文章"><a href="#参考文章" class="headerlink" title="参考文章"></a>参考文章</h2><p><a href="https://letsencrypt.org/docs/certificates-for-localhost/" target="_blank" rel="noopener">https://letsencrypt.org/docs/certificates-for-localhost/</a></p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;p&gt;现在众多网站或者浏览器的API都需要启用HTTPS，本地如果无法启用HTTPS就会有诸多开发的不便。&lt;/p&gt;&lt;p&gt;其实本地开发启用HTTPS只需要简单几步就可以搞定：&lt;/p&gt;&lt;h2 id=&quot;生成加密证书对&quot;&gt;&lt;a href=&quot;#生成加密证书对&quot; class=&quot;headerl
+      
+    
+    </summary>
+    
+    
+      <category term="web development" scheme="https://ice.gs/tags/web-development/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>组装一台黑苹果</title>
+    <link href="https://ice.gs/2018/10/14/%E4%B8%80%E5%8F%B0%E9%BB%91%E8%8B%B9%E6%9E%9C/"/>
+    <id>https://ice.gs/2018/10/14/一台黑苹果/</id>
+    <published>2018-10-14T09:34:09.000Z</published>
+    <updated>2019-03-16T06:17:29.339Z</updated>
+    
+    <content type="html"><![CDATA[<p>发烧然后退烧，就组装的一台黑苹果。采用的开放式机箱（某宝亚克力机箱）。</p><p>感觉整体的流畅度比我13年的MacBook Air 和 17年的 MacBook pro （i7双核 16g）都要流畅。</p><p><img src="/images/2018/mock-mac/pc0.jpeg" alt><br><img src="/images/2018/mock-mac/pc1.jpeg" alt><br><img src="/images/2018/mock-mac/pc2.jpeg" alt></p><h2 id="硬件"><a href="#硬件" class="headerlink" title="硬件"></a>硬件</h2><p>配件全部从某宝购买</p><ul><li>主板：华硕 Z370-P</li><li>CPU：I5-8400</li><li>CPU风扇：买的CPU配的有</li><li>硬盘：影驰 铁甲战将240G 7mm/SATA3</li><li>内存：影驰 Gamer DDR4-2400/3000 8G</li><li>显卡：影驰 GeForce GTX1050Ti 大将 4G</li><li>电源：鑫谷核动力S7</li><li>机箱：开放式亚克力机箱</li></ul><h2 id="系统"><a href="#系统" class="headerlink" title="系统"></a>系统</h2><p>10.14 系统虽然已出，但是黑苹果的适配还不完善，N卡驱动也还不支持，所以目前按照的比较成熟的10.13</p><h3 id="系统镜像"><a href="#系统镜像" class="headerlink" title="系统镜像"></a>系统镜像</h3><p>镜像从<a href="https://blog.daliansky.net/macOS-High-Sierra-10.13.6-17G2112-Release-Special-with-Clover-4606-original-mirror.html" target="_blank" rel="noopener">黑果小兵下载 10.13.6</a></p><h3 id="刻录镜像到U盘"><a href="#刻录镜像到U盘" class="headerlink" title="刻录镜像到U盘"></a>刻录镜像到U盘</h3><p>使用 Etcher 直接将下载的镜像刻录到U盘</p><h3 id="引导安装系统"><a href="#引导安装系统" class="headerlink" title="引导安装系统"></a>引导安装系统</h3><p>开机选择U盘启动，进入安装界面，进行安装。</p><blockquote><p>如果无法引导到安装界面，可于Clover主界面-Options-Graphics进行显卡仿冒</p></blockquote><h3 id="安装驱动等"><a href="#安装驱动等" class="headerlink" title="安装驱动等"></a>安装驱动等</h3><p>安装N卡驱动：</p><blockquote><p>bash &lt;(curl -s <a href="https://raw.githubusercontent.com/Benjamin-Dobell/nvidia-update/master/nvidia-update.sh" target="_blank" rel="noopener">https://raw.githubusercontent.com/Benjamin-Dobell/nvidia-update/master/nvidia-update.sh</a>)</p></blockquote><p>安装四叶草及其他驱动：</p><p>下载 <a href="https://www.tonymacx86.com/resources/categories/tonymacx86-downloads.3/" target="_blank" rel="noopener">MultiBeast 10.4.0 - High Sierra</a></p><p><img src="/images/2018/mock-mac/04.jpg" alt></p><h2 id="后记"><a href="#后记" class="headerlink" title="后记"></a>后记</h2><p>目前看起来除了CPU显示未知以外，没有发现其他问题。</p><h2 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h2><p><a href="https://blog.daliansky.net/macOS-High-Sierra-10.13.6-17G2112-Release-Special-with-Clover-4606-original-mirror.html" target="_blank" rel="noopener">https://blog.daliansky.net/macOS-High-Sierra-10.13.6-17G2112-Release-Special-with-Clover-4606-original-mirror.html</a></p><p><a href="https://www.tonymacx86.com" target="_blank" rel="noopener">https://www.tonymacx86.com</a></p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;p&gt;发烧然后退烧，就组装的一台黑苹果。采用的开放式机箱（某宝亚克力机箱）。&lt;/p&gt;&lt;p&gt;感觉整体的流畅度比我13年的MacBook Air 和 17年的 MacBook pro （i7双核 16g）都要流畅。&lt;/p&gt;&lt;p&gt;&lt;img src=&quot;/images/2018/mock-
+      
+    
+    </summary>
+    
+    
+      <category term="os" scheme="https://ice.gs/tags/os/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>ES6 Modules in Chrome 61 +</title>
+    <link href="https://ice.gs/2017/11/04/ES6Moudles/"/>
+    <id>https://ice.gs/2017/11/04/ES6Moudles/</id>
+    <published>2017-11-04T14:24:28.000Z</published>
+    <updated>2019-03-16T06:17:29.336Z</updated>
+    
+    <content type="html"><![CDATA[<p>在Chrome 61+ 中尝试使用ES6 Modules</p><h3 id="Index-html"><a href="#Index-html" class="headerlink" title="Index.html"></a>Index.html</h3><pre><code>&lt;!DOCTYPE html&gt;&lt;html lang=&quot;en&quot;&gt;&lt;head&gt;  &lt;meta charset=&quot;UTF-8&quot;&gt;  &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1.0&quot;&gt;  &lt;meta http-equiv=&quot;X-UA-Compatible&quot; content=&quot;ie=edge&quot;&gt;  &lt;title&gt;Document&lt;/title&gt;&lt;/head&gt;&lt;body&gt;  &lt;p&gt;2+3 = &lt;span class=&quot;result&quot;&gt;&lt;/span&gt;&lt;/p&gt;  &lt;script type=&quot;module&quot;&gt;    import { add } from &#39;./common.js&#39;;     (function () {       document.querySelector(&#39;.result&#39;).innerText = add(2, 3);       console.log(add(2, 3));    }());  &lt;/script&gt;&lt;/body&gt;&lt;/html&gt;</code></pre><h3 id="Common-js"><a href="#Common-js" class="headerlink" title="Common.js"></a>Common.js</h3><pre><code>console.log(&#39;common.js&#39;);export function add (a, b) {    return a + b;}</code></pre><h3 id="Run"><a href="#Run" class="headerlink" title="Run"></a>Run</h3><p><a href="https://codepen.io/GGICE/project/editor/ZwBqyg" target="_blank" rel="noopener">Click it</a></p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;p&gt;在Chrome 61+ 中尝试使用ES6 Modules&lt;/p&gt;&lt;h3 id=&quot;Index-html&quot;&gt;&lt;a href=&quot;#Index-html&quot; class=&quot;headerlink&quot; title=&quot;Index.html&quot;&gt;&lt;/a&gt;Index.html&lt;/h3&gt;&lt;pre&gt;&lt;
+      
+    
+    </summary>
+    
+    
+      <category term="web development" scheme="https://ice.gs/tags/web-development/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>Nginx 开启支持 HTTP2</title>
+    <link href="https://ice.gs/2017/06/17/nginx-qi-yong-http2-2/"/>
+    <id>https://ice.gs/2017/06/17/nginx-qi-yong-http2-2/</id>
+    <published>2017-06-17T02:45:18.000Z</published>
+    <updated>2017-06-17T06:54:03.000Z</updated>
+    
+    <content type="html"><![CDATA[<h2 id="HTTP2的好处"><a href="#HTTP2的好处" class="headerlink" title="HTTP2的好处"></a>HTTP2的好处</h2><ul><li>Server Push 主动推送资源 （目前nginx还不支持，新版本nodeJs可以配置实现）</li><li>用帧二进制编码传输数据，连接可以承载任意数量的双向数据流 (所以不用关心，请求的数量了)</li><li>头部压缩，减少请求时间</li></ul><h2 id="版本要求"><a href="#版本要求" class="headerlink" title="版本要求"></a>版本要求</h2><p>Nginx 1.9.5 及其以上版本</p><h2 id="配置"><a href="#配置" class="headerlink" title="配置"></a>配置</h2><p>其实配置很简单，只需要在原本配置的<code>listen</code>处加入 <code>http2</code> 的声明即可，而且对无法支持HTTP2的浏览器，nginx会做自动降级处理。<br>(<a href="https://www.nginx.com/blog/nginx-1-9-5/" target="_blank" rel="noopener">Nginx 官方说明</a>)</p><pre><code>server {    listen 443 ssl http2 default_server;    ssl_certificate    server.crt;    ssl_certificate_key server.key;    ...}</code></pre><h2 id="查看网站是否启用HTTP2"><a href="#查看网站是否启用HTTP2" class="headerlink" title="查看网站是否启用HTTP2"></a>查看网站是否启用HTTP2</h2><p>在chrome控制台的Network中开启Protocol即可查看请求类型<br><img src="/images/2017/06/http2-1.png" alt></p><p>成功开启HTTP2，将会出现h2的标记</p><p><img src="/images/2017/06/http2-2.png" alt></p><h2 id="为什么会开启失败"><a href="#为什么会开启失败" class="headerlink" title="为什么会开启失败"></a>为什么会开启失败</h2><p>几个月之前就将树莓派上的Nginx配置支持HTTP2，后来部分服务迁移到某国外服务器，直接将Nginx配置Copy过去却发现没有生效。</p><p>为什么会开启失败，首先第一个Nginx的version一定要对，在version正确的前提下，修改配置文件后，其实我们已经完成开启HTTP2。</p><p>但是如果Nginx所在操作系统OpenSSL Version为1.0.1x, Nginx基于这些版本 的OpenSSL编译，将会支持<br><code>NPN</code>而不支持<code>ALPN</code>，而新版的Chrome 只支持<code>ALPN</code>，所以如果是这种情况在Chrome浏览器中HTTP2依然不会生效。</p><p><a href="https://www.nginx.com/blog/supporting-http2-google-chrome-users/" target="_blank" rel="noopener">Nginx官方说明</a></p><p>在<a href="https://serverfault.com/questions/775298/debian-jessie-nginx-with-openssl-1-0-2-to-use-alpn-rather-than-npn" target="_blank" rel="noopener">serverfault.com</a>也有网友给出了解决方案（debian 系统）</p><blockquote><p>This is a blockquote with two paragraphs. Lorem ipsum dolor sit amet,<br>consectetuer adipiscing elit. Aliquam hendrerit mi posuere lectus.<br>Vestibulum enim wisi, viverra nec, fringilla in, laoreet vitae, risus.</p><p>Donec sit amet nisl. Aliquam semper ipsum sit amet velit. Suspendisse<br>id sem consectetuer libero luctus adipiscing.</p></blockquote>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;h2 id=&quot;HTTP2的好处&quot;&gt;&lt;a href=&quot;#HTTP2的好处&quot; class=&quot;headerlink&quot; title=&quot;HTTP2的好处&quot;&gt;&lt;/a&gt;HTTP2的好处&lt;/h2&gt;&lt;ul&gt;&lt;li&gt;Server Push 主动推送资源 （目前nginx还不支持，新版本nodeJs
+      
+    
+    </summary>
+    
+    
+      <category term="web development" scheme="https://ice.gs/tags/web-development/"/>
+    
+      <category term="nginx" scheme="https://ice.gs/tags/nginx/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>BFC、IFC</title>
+    <link href="https://ice.gs/2017/06/12/bfc-ifc-2/"/>
+    <id>https://ice.gs/2017/06/12/bfc-ifc-2/</id>
+    <published>2017-06-12T09:12:23.000Z</published>
+    <updated>2017-06-15T07:24:45.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>参考w3c <a href="https://www.w3.org/TR/CSS2/visuren.html#normal-flow" target="_blank" rel="noopener">visual-model-intro</a> 章节, 9.4 Normal flow</p><h2 id="BFC-块级格式上下文"><a href="#BFC-块级格式上下文" class="headerlink" title="BFC 块级格式上下文"></a>BFC 块级格式上下文</h2><h3 id="形成BFC的情况"><a href="#形成BFC的情况" class="headerlink" title="形成BFC的情况"></a>形成BFC的情况</h3><ul><li>浮动的元素</li><li>绝对定位的元素</li><li><code>overflow</code>不为<code>visible</code>的元素 （除非该值已经被传播到视口, 比如<code>body</code>元素设置<code>overflow</code>的情况）</li><li>不是区块盒子的块容器（比如 <code>inline-blocks</code>,<code>table-cells</code>,<code>table-captions</code>）</li></ul><h3 id="BFC的布局规则"><a href="#BFC的布局规则" class="headerlink" title="BFC的布局规则"></a>BFC的布局规则</h3><ul><li>在BFC中，元素从包含块的顶部开始，一个接一个的垂直排布</li><li>在BFC中，两个兄弟盒之间的垂直距离由<code>margin</code>属性决定</li><li>在BFC中，相邻的块级元素垂直边距会发生合并</li><li>在BFC中，每个盒子的左边触碰包含块的左边缘（若从右到左格式，则右侧接触）。即使是浮动元素情况也是如此, 除非盒子建立了一个新的BFC环境</li></ul><p>最后一条，有些难理解，看下下面的例子：</p><p>默认情况下p标签是触碰包含块的左边缘排列的，当我们设置p为新的BFC时，p标签就不会贴着左边缘排列了</p><p><a href="https://codepen.io/GGICE/pen/XgXRbR" target="_blank" rel="noopener">🌰</a></p><h3 id="BFC可以解决的问题"><a href="#BFC可以解决的问题" class="headerlink" title="BFC可以解决的问题"></a>BFC可以解决的问题</h3><ul><li>布局问题</li><li>清除浮动</li><li>防止垂直边距合并（两个相邻BFC垂直边距不会发生合并）</li></ul><h2 id="IFC-行内格式上下文"><a href="#IFC-行内格式上下文" class="headerlink" title="IFC 行内格式上下文"></a>IFC 行内格式上下文</h2><h3 id="形成IFC的情况"><a href="#形成IFC的情况" class="headerlink" title="形成IFC的情况"></a>形成IFC的情况</h3><p>当一个块级内容盒子的内容只有行内元素时就形成了一个行内格式上下文环境</p><h3 id="IFC的布局规则"><a href="#IFC的布局规则" class="headerlink" title="IFC的布局规则"></a>IFC的布局规则</h3><ul><li>在IFC中，元素从包含块的顶部开始，一个接着一个的水平排列(包含这些行内元素和和形成的框组成的长方形区域称为<code>行盒</code>)</li><li>这些内部元素的横向<code>margins</code>，<code>borders</code> 都会生效</li><li>这些内部元素可以以不同的方式对齐 （基于底部、顶部或者基线对齐）</li><li>行盒的宽度由包含块决定，行块的高度由行<a href="https://www.w3.org/TR/CSS21/visudet.html#line-height" target="_blank" rel="noopener">高度计算</a>部分中给出的规则确定</li><li>行盒的高度总是足够高足以包含所有的盒子，但它可能高于包含的最高的盒子（不同的定位方式可能导致），当包含盒子的高度小于行盒时盒子的垂直对齐方式由<code>vertical-align</code>确定</li><li>当多个行内级别的盒子不能水平放置在一个行盒张中时，他们会分布在一个或多个垂直堆叠的行盒中</li><li>通常，行盒的左边缘接触包含块的左边缘，右边缘接触其包含块的右边缘。但是，浮动元素可能在浮动盒子边缘与行盒边缘之间，因此，虽然同一IFC中的行内盒子通常具有相同的宽度，但是他们的宽度会因浮动元素而减少，在同一IFC种的行盒的高度可能不同（例如一行是图片，一行是文本）</li><li>当行内盒子的总宽度小于包含他们的行盒的宽度时，他们在行盒中的水平分布由<code>text-align</code>确定，如果该属性的值为<code>justify</code> , 则用户代理可以在行内盒子（除了inline-table 、inline-block的盒子 ）中展开空格和单词。</li><li>当一个行内盒子的宽度大于行盒时，它会被分成几个盒子，这些盒子分布在多个行盒中，如果行内盒子不能被拆分（单个字符、特殊单词不允许中断、<code>nowrap</code>、<code>pre</code>）行内盒子则会溢出行盒；<code>margins</code>, <code>borders</code>, and <code>padding</code>出现在分割处没有视觉效果</li><li>由于双向文本处理多个行内元素也可能被分割到同一个行盒</li><li>在IFC中存在行内级别的内容就会创建行盒，如果行盒里面没有文字、不包含空格、没有margins, padding, or borders 非0的元素，没有其他 in-flow 内容（比如images，inline blocks 和 inline tables），并且不以换行符结束，将视为高度为0的行盒，也被认为是没有意义的</li></ul><h3 id="BFC可以解决的问题-1"><a href="#BFC可以解决的问题-1" class="headerlink" title="BFC可以解决的问题"></a>BFC可以解决的问题</h3><ul><li>布局问题</li></ul><h2 id="参考"><a href="#参考" class="headerlink" title="参考"></a>参考</h2><p>参考w3c visual-model-intro 章节, 9.4 Normal flow</p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;p&gt;参考w3c &lt;a href=&quot;https://www.w3.org/TR/CSS2/visuren.html#normal-flow&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;&gt;visual-model-intro&lt;/a&gt; 章节, 9.4 Normal 
+      
+    
+    </summary>
+    
+    
+      <category term="web development" scheme="https://ice.gs/tags/web-development/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>基于JWT的登录验证系统实现</title>
+    <link href="https://ice.gs/2017/06/01/ji-yu-jwtde-deng-lu-yan-zheng-xi-tong-shi-xian/"/>
+    <id>https://ice.gs/2017/06/01/ji-yu-jwtde-deng-lu-yan-zheng-xi-tong-shi-xian/</id>
+    <published>2017-06-01T04:31:29.000Z</published>
+    <updated>2017-06-01T22:14:30.000Z</updated>
+    
+    <content type="html"><![CDATA[<h2 id="概述"><a href="#概述" class="headerlink" title="概述"></a>概述</h2><p>基于JWT的简单登录认证流程图：</p><p><img src="/images/2017/06/jwt-1.png" alt></p><h2 id="JWT"><a href="#JWT" class="headerlink" title="JWT"></a>JWT</h2><blockquote><p>JSON Web token（JWT）是一种开放标准（RFC 7519），它定义了一种紧凑且独立的方式，用于将各方之间的信息安全地传输为JSON对象。该信息可以通过数字签名进行验证和信任。使用密匙 （使用哈希算法）或使用RSA的公钥/私钥对可以对JWT进行签名。</p></blockquote><p>jwt是对于token认证方式的一种规范和描述。</p><h4 id="JWT-的构成"><a href="#JWT-的构成" class="headerlink" title="JWT 的构成"></a>JWT 的构成</h4><p>jwt由三部分构成，并用<code>.</code>作为间隔：</p><ul><li>Header</li><li>Payload</li><li>Signature</li></ul><p>看起来像这样 <code>xxxxx.yyyyy.zzzzz</code></p><h5 id="Header"><a href="#Header" class="headerlink" title="Header"></a>Header</h5><p>Header用来描述token类型和加密算法(HMAC、SHA256、RSA 等)，如下：</p><pre><code class="json">{  &quot;alg&quot;: &quot;HS256&quot;,  &quot;typ&quot;: &quot;JWT&quot;}</code></pre><h5 id="Payload"><a href="#Payload" class="headerlink" title="Payload"></a>Payload</h5><p>这部分用来放置token的有效信息，有<code>reserved，public，private</code>三种类型：</p><ul><li><strong>Reserved claims：</strong> 一些保留类型的，推荐但不强制必须使用，包括以下属性<ul><li><strong>iss</strong>: jwt签发者</li><li><strong>sub</strong>: jwt所面向的用户</li><li><strong>aud</strong>: 接收jwt的一方</li><li><strong>exp</strong>: jwt的过期时间，这个过期时间必须要大于签发时间</li><li><strong>nbf</strong>: 定义在什么时间之前，该jwt都是不可用的.</li><li><strong>iat</strong>: jwt的签发时间</li><li><strong>jti</strong>: jwt的唯一身份标识，主要用来作为一次性token,从而回避重放攻击。</li></ul></li><li><strong>Public claims：</strong> 可以随意定义的属性, 但为了避免冲突，他们应该使用 IANA JSON Web Token Registry 定义或使用 URL 定义。</li><li><strong>Private claims:</strong> 这些是为了在同意使用它们的各方之间共享信息而创建的自定义声明。</li></ul><p>一个Payload看起来像这样</p><pre><code class="json">{  &quot;sub&quot;: &quot;1234567890&quot;,  &quot;name&quot;: &quot;John Doe&quot;,  &quot;admin&quot;: true}</code></pre><h5 id="Signature"><a href="#Signature" class="headerlink" title="Signature"></a>Signature</h5><p>将Header、Payload编码后加上secret，并用Header声明的算法进行加密，看起来伪代码的实现是这样的</p><pre><code class="javascript">HMACSHA256(  base64UrlEncode(header) + &quot;.&quot; +  base64UrlEncode(payload),  secret)</code></pre><h5 id="把三部分组合起来"><a href="#把三部分组合起来" class="headerlink" title="把三部分组合起来"></a>把三部分组合起来</h5><p>最终的样子像这样</p><pre><code class="javascript">eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWV9.TJVA95OrM7E2cBab30RMHrHDcEfxjoYZgeFONFh7HgQ</code></pre><h2 id="实现登录认证"><a href="#实现登录认证" class="headerlink" title="实现登录认证"></a>实现登录认证</h2><h4 id="服务端"><a href="#服务端" class="headerlink" title="服务端"></a>服务端</h4><p><a href="jwt.io">jwt.io</a>网站提供众多后端语言的支持库，帮我们封装好了jwt的一些具体实现，其中包括Node.js的<a href="https://github.com/auth0/node-jsonwebtoken" target="_blank" rel="noopener">node-jsonwebtoken</a> 。</p><h5 id="生成token"><a href="#生成token" class="headerlink" title="生成token"></a>生成token</h5><p><code>jwt.sign(payload, secretOrPrivateKey, [options, callback])</code></p><p><code>jwt.sign</code> 方法中的<code>secretOrPrivateKey</code>即为JWT第三部分<code>Signature</code>中的secret, 它既可以是一个复杂的字符串，也可以是一对密钥对中的<code>PrivateKey</code>。</p><pre><code class="javascript">var privateKey = fs.readFileSync(config.privateKey)var token = jwt.sign({    user: oneUser._id,    exp: Math.floor(Date.now() / 1000) + (30) //30s后过期}, privateKey, { algorithm: &#39;RS256&#39;})</code></pre><p>privatekey生成</p><pre><code>ssh-keygen -t rsa -b 4096 -f private.key #生成私钥# Don&#39;t add passphraseopenssl rsa -in private.key -pubout -outform PEM -out public.key #生成对应公钥# 生成公钥格式需要是PEM格式的, ss-keygen 也可以生成公钥# ssh-keygen -f public.key -e -m pem  cat private.keycat public.key</code></pre><h5 id="验证token"><a href="#验证token" class="headerlink" title="验证token"></a>验证token</h5><p><code>jwt.verify(token, secretOrPublicKey, [options, callback])</code></p><pre><code class="javascript">var publicKey = fs.readFileSync(config.publicKey)try {  result = jwt.verify(token, publicKey) } catch(e) {}</code></pre><h4 id="客户端"><a href="#客户端" class="headerlink" title="客户端"></a>客户端</h4><p>在每次发起需验证请求时在头部携带JWT格式的token</p><pre><code>Authorization: Bearer &lt;token&gt;</code></pre><h3 id="优点"><a href="#优点" class="headerlink" title="优点"></a>优点</h3><blockquote><ul><li>体积小，因而传输速度快</li><li>传输方式多样，可以通过 URL/PosT 参数/HTTP 头部 等方式传输</li><li>严谨的结构化。它自身（在 payload 中）就包含了所有与用户相关的验证消息，如用户可访问路由、访问有效期等信息，服务器无需再去连接数据库验证信息的有效性，并且 payload 支持为你的应用而定制化</li><li>支持跨域验证，多应用于单点登录。</li><li>充分依赖无状态 API ，契合 RESTful 设计原则</li><li>验证解耦，无需使用特定的身份验证方案，易于实现分布式</li><li>比 cookie 更支持原生移动端应用</li></ul></blockquote><h2 id="单点登录实现"><a href="#单点登录实现" class="headerlink" title="单点登录实现"></a>单点登录实现</h2><h4 id="登录"><a href="#登录" class="headerlink" title="登录"></a>登录</h4><p>基于jwt的验证方式实现单点登录，只需要在单点（暂时称之为center）登录后通过一定方式将token分发给其他点。</p><p>token的验证可以在center端统一处理，也可将上文提到的<code>publicKey</code>分发给各个点，各个点自行验证。</p><p>token的各个点存储可以通过cookie、localstorage。</p><p><img src="/images/2017/06/jwt-2.png" alt></p><h4 id="退出登录"><a href="#退出登录" class="headerlink" title="退出登录"></a>退出登录</h4><p>退出登录实现和登录类似，请求center退出登录页面，center清理各个点的cookie或者localstorage实现退出登录。</p><h2 id="参考资料"><a href="#参考资料" class="headerlink" title="参考资料"></a>参考资料</h2><p><a href="https://medium.com/vandium-software/5-easy-steps-to-understanding-json-web-tokens-jwt-1164c0adfcec" target="_blank" rel="noopener">5 Easy Steps to Understanding JSON Web Tokens (JWT)</a></p><p><a href="https://jwt.io/introduction/" target="_blank" rel="noopener">Introduction to JSON Web Tokens</a></p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;h2 id=&quot;概述&quot;&gt;&lt;a href=&quot;#概述&quot; class=&quot;headerlink&quot; title=&quot;概述&quot;&gt;&lt;/a&gt;概述&lt;/h2&gt;&lt;p&gt;基于JWT的简单登录认证流程图：&lt;/p&gt;&lt;p&gt;&lt;img src=&quot;/images/2017/06/jwt-1.png&quot; alt&gt;&lt;/p&gt;&lt;h
+      
+    
+    </summary>
+    
+    
+      <category term="web development" scheme="https://ice.gs/tags/web-development/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>通过 Webpack打包，了解不同的“模块定义”</title>
+    <link href="https://ice.gs/2017/05/27/tong-guo-webpackda-bao-liao-jie-bu-tong-de-mo-kuai-ding-yi/"/>
+    <id>https://ice.gs/2017/05/27/tong-guo-webpackda-bao-liao-jie-bu-tong-de-mo-kuai-ding-yi/</id>
+    <published>2017-05-26T18:10:00.000Z</published>
+    <updated>2017-05-26T18:48:30.000Z</updated>
+    
+    <content type="html"><![CDATA[<h2 id="webpack-打包输出方式"><a href="#webpack-打包输出方式" class="headerlink" title="webpack 打包输出方式"></a>webpack 打包输出方式</h2><p>在webpack config中有两个属性</p><h3 id="output-library-设置打包输入的library名"><a href="#output-library-设置打包输入的library名" class="headerlink" title="output.library  设置打包输入的library名"></a><code>output.library</code> 设置打包输入的library名</h3><h3 id="output-libraryTarge-设置打包方式"><a href="#output-libraryTarge-设置打包方式" class="headerlink" title="output.libraryTarge 设置打包方式"></a><code>output.libraryTarge</code> 设置打包方式</h3><ul><li><p><code>var</code> var MyLibrary = _entry_return_; (默认)</p></li><li><p><code>this</code> this[“MyLibrary”] = _entry_return_;</p></li><li><p><code>window</code> window[“MyLibrary”] = _entry_return_;</p></li><li><p><code>global</code> global[“MyLibrary”] = _entry_return_;</p></li><li><p><code>commonjs</code> exports[“Library”] = xxx</p></li><li><p><code>commonjs2</code> module.exports = xxx</p></li><li><p><code>amd</code> Export to AMD</p></li><li><p><code>umd</code> Export to AMD, CommonJS2 or as property in root</p><p>当配置为<code>this</code> <code>commonjs</code> 时而没有设置 <code>output.library</code> 打包时会复制导出对象的每个属性，即将每个属性都绑定到 this 或者 exports。</p><p><code>var</code> 和 <code>this</code> 方式适合在浏览器中直接运行，通过src方式引入的话，其实两者都是将Library帮到到了window。</p><p><code>commonjs</code> 适用于用标准commonjs引入</p><p><code>commonjs2</code> 适用于Node.js</p><p><code>amd</code> 适用于requireJs</p><p><code>umd</code> 同时支持了 AMD, CommonJS2, CommonJS 和 绑定到全局变量的方式（浏览器运行）</p><p>会有类似下面代码做各种模块加载支持</p></li></ul><pre><code>     !function(e, t) {       &quot;object&quot; == typeof exports &amp;&amp; &quot;object&quot; == typeof module ? module.exports = t() :       &quot;function&quot; == typeof define &amp;&amp; define.amd ? define([], t) :        &quot;object&quot; == typeof exports ? exports.Iceter = t() : e.Iceter = t()    }(this, function()) {}</code></pre><h2 id="AMD、CommonJS、UMD"><a href="#AMD、CommonJS、UMD" class="headerlink" title="AMD、CommonJS、UMD"></a>AMD、CommonJS、UMD</h2><h3 id="AMD"><a href="#AMD" class="headerlink" title="AMD"></a>AMD</h3><p>Asynchronous module definition (异步模块定义)，多用于浏览器端，典型的实现RequireJS。AMD可以异步加载模块，即便相互依赖的模块也可以分别加载，在所有依赖加载完成后运行，这对于浏览器来说不会发生阻塞，对页面加载有重要意义。</p><h3 id="CommonJS"><a href="#CommonJS" class="headerlink" title="CommonJS"></a>CommonJS</h3><p>CommonJS是同步加载模块，NodeJS的module算是CommonJS的部分的实现。因为是同步加载所以不适用于浏览器端。</p><p>Webpack里面提到的<code>commonjs</code> 完全符合CommonJS定义语法的输出，而像Node.js 用<code>module.export</code> 代替 <code>exports</code>并不完全符合CommonJS所以用<code>commonjs2</code>表示，这里只是Webpack对两种形式做的区分。</p><blockquote><p>CommonJS 规范是为了解决 JavaScript 的作用域问题而定义的模块形式，可以使每个模块它自身的命名空间中执行。该规范的主要内容是，模块必须通过 <code>module.exports</code> 导出对外的变量或接口，通过 <code>require()</code> 来导入其他模块的输出到当前模块作用域中。</p></blockquote><h3 id="UMD"><a href="#UMD" class="headerlink" title="UMD"></a>UMD</h3><p>Universal Module Definition（通用模块定义）, 支持了 AMD, CommonJS2, CommonJS 和 绑定到全局变量的方式。</p><p>​</p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;h2 id=&quot;webpack-打包输出方式&quot;&gt;&lt;a href=&quot;#webpack-打包输出方式&quot; class=&quot;headerlink&quot; title=&quot;webpack 打包输出方式&quot;&gt;&lt;/a&gt;webpack 打包输出方式&lt;/h2&gt;&lt;p&gt;在webpack config中有两个属性&lt;
+      
+    
+    </summary>
+    
+    
+      <category term="web development" scheme="https://ice.gs/tags/web-development/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>前端框架对比与实现</title>
+    <link href="https://ice.gs/2017/05/14/qian-duan-kuang-jia-dui-bi-yu-shi-xian/"/>
+    <id>https://ice.gs/2017/05/14/qian-duan-kuang-jia-dui-bi-yu-shi-xian/</id>
+    <published>2017-05-13T21:54:22.000Z</published>
+    <updated>2017-05-16T07:32:42.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>之前talk分享的PPT，对比一些主要的前端类MVC框架（Vue2，Angular2，React）和实现</p><iframe src="//slides.com/weiweiggice/deck/embed" width="100%" height="720" scrolling="no" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;p&gt;之前talk分享的PPT，对比一些主要的前端类MVC框架（Vue2，Angular2，React）和实现&lt;/p&gt;&lt;iframe src=&quot;//slides.com/weiweiggice/deck/embed&quot; width=&quot;100%&quot; height=&quot;720&quot; scrol
+      
+    
+    </summary>
+    
+    
+      <category term="web development" scheme="https://ice.gs/tags/web-development/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>CSS Grid</title>
+    <link href="https://ice.gs/2017/03/08/css-grid/"/>
+    <id>https://ice.gs/2017/03/08/css-grid/</id>
+    <published>2017-03-08T06:15:37.000Z</published>
+    <updated>2017-03-10T01:12:29.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>CSS Grid 一种二维布局系统, 最初草案于2011年4月发布，最初在IE10上实现，通过<code>-ms-</code>使用。经过6年的探索和发展，17年有了较为稳定的候选版本，Firfox在52版本中实现了对<a href="https://www.w3.org/TR/css-grid-1/" target="_blank" rel="noopener">CSS Grid Layout Module Level 1</a>的支持，Chrome在57版本实现了支持，Safari在10.1版本实现支持。</p><p><img src="/content/images/2017/03/Screen-Shot-2017-03-09-at-12-06-32-PM.png" alt></p><p>相比Flex Grid是为了解决二维布局问题，Flex则解决一维布局问题；在Grid诞生之前没有很恰当解决二维布局的方法，很久之前采用的是基于表格的布局方式，后来一般是采用float布局结合Flex等实现布局，但是这些都并非原属性设计的使用初衷，Grid才是一种更好的布局方案，随着草案的完善和浏览器的支持，之后肯定会得到广泛应用。</p><p><img src="/content/images/2017/03/Screen-Shot-2017-03-09-at-11-16-48-AM.png" alt></p><h1 id="概念和术语"><a href="#概念和术语" class="headerlink" title="概念和术语"></a>概念和术语</h1><p><img src="/content/images/2017/03/Screen-Shot-2017-03-09-at-5-59-21-PM.png" alt></p><h2 id="Grid-Lines"><a href="#Grid-Lines" class="headerlink" title="Grid Lines"></a>Grid Lines</h2><p>指形成网格的水平和垂直线</p><h2 id="Grid-Tracks-and-Cells"><a href="#Grid-Tracks-and-Cells" class="headerlink" title="Grid Tracks and Cells"></a>Grid Tracks and Cells</h2><p>Grid Tracks 指相邻网格间的区域<br>Grid Cells 指2个相邻行网格线和2个相邻列网格线之间的区域<br>Grid Areas 由一或多个Cell组成的区域</p><iframe height="265" scrolling="no" title="CSS-GRID" src="//codepen.io/GGICE/embed/preview/ryjYLw/?height=265&theme-id=dark&default-tab=css,result&embed-version=2" frameborder="no" allowtransparency="true" allowfullscreen style="width:100%">See the Pen <a href="https://codepen.io/GGICE/pen/ryjYLw/" target="_blank" rel="noopener">CSS-GRID</a> by GGICE (<a href="http://codepen.io/GGICE" target="_blank" rel="noopener">@GGICE</a>) on <a href="http://codepen.io" target="_blank" rel="noopener">CodePen</a>.<br></iframe><h1 id="Grid-Container-属性"><a href="#Grid-Container-属性" class="headerlink" title="Grid Container 属性"></a>Grid Container 属性</h1><ul><li>display</li><li>grid-template-columns</li><li>grid-template-rows</li><li>grid-template-areas</li><li>grid-template</li><li>grid-column-gap</li><li>grid-row-gap</li><li>grid-gap</li><li>grid-auto-columns</li><li>grid-auto-rows</li><li>grid-auto-flow</li><li>justify-items</li><li>grid</li><li>justify-content</li><li>align-content</li><li>justify-items</li><li>align-items</li></ul><h2 id="grid-template-columns-和-grid-template-rows"><a href="#grid-template-columns-和-grid-template-rows" class="headerlink" title="grid-template-columns 和 grid-template-rows"></a><code>grid-template-columns 和 grid-template-rows</code></h2><p>定义行列轨迹</p><pre><code>grid-template-columns: none | &lt;track-list&gt; | &lt;auto-track-list&gt;grid-template-rows: none | &lt;track-list&gt; | &lt;auto-track-list&gt;</code></pre><h3 id="lt-track-list-gt"><a href="#lt-track-list-gt" class="headerlink" title="&lt;track-list&gt;"></a><code>&lt;track-list&gt;</code></h3><pre><code>[ &lt;line-names&gt;? [ &lt;track-size&gt; | &lt;track-repeat&gt; ] ]+ &lt;line-names&gt;?</code></pre><h4 id="lt-track-size-gt"><a href="#lt-track-size-gt" class="headerlink" title="&lt;track-size&gt;"></a><code>&lt;track-size&gt;</code></h4><p><code>&lt;track-breadth&gt;</code></p><ul><li>css 长度如px、%</li><li>flexible 长度如 1fr (比例分配剩余的空间) <a href="https://igalia.github.io/css-grid-layout/breadth.html" target="_blank" rel="noopener">🌰</a></li><li><code>min-content</code> 字符，不超出边界的最小尺寸</li><li><code>max-content</code> 字符，装配内容的所需的最小尺寸 <a href="https://igalia.github.io/css-grid-layout/max-min-content.html" target="_blank" rel="noopener">🌰</a></li><li><code>auto</code> 字符，占据所有剩余的空间</li></ul><pre><code>.grid {  display: grid;  grid-template-columns: min-content max-content auto;}</code></pre><p><img src="/content/images/2017/03/Screen-Shot-2017-03-09-at-8-06-53-PM.png" alt></p><p><code>计算函数:</code></p><p><code>minmax(&lt;inflexible-breadth&gt; , &lt;track-breadth&gt;)</code></p><p>可以是由minmax（）函数定义的范围，其中第一个值为最小值，第二个值为最大值。对于这种情况，最小值不能是flexible长度，因此您可以使用除flexible单位外的所有类型的值作为<track-breadth>。</track-breadth></p><p>注意：在后期版本中可能支持第第一个最小值为flexible单位</p><p><code>fit-content(&lt;length-percentage&gt;)</code></p><p>表示公式min（max-content，max（auto，argument）），其计算类似于auto（即minmax（auto，max-content））。</p><p><code>auto</code><br>作为最大值时，等于<code>max-content</code>。作为最小值时，相当于<code>min-content</code>。<br>注意：自动轨道大小（并且只有自动轨道大小）可以通过align-content和justify-content属性进行扩展。</p><h4 id="lt-track-repeat-gt"><a href="#lt-track-repeat-gt" class="headerlink" title="&lt;track-repeat&gt;"></a><code>&lt;track-repeat&gt;</code></h4><p>利用一个repeat函数帮助我们实现一个很多行很多列的网格。</p><pre><code>repeat( [ &lt;positive-integer&gt; ] , [ &lt;line-names&gt;? &lt;track-size&gt; ]+ &lt;line-names&gt;? )</code></pre><pre><code>grid-template-columns: 30px 100px 30px 100px 30px 100px 30px 100px;/* same as above but with the repeat() function */grid-template-columns: repeat(4, 30px 100px);</code></pre><p><code>&lt;line-names&gt;</code></p><p>给网格线添加一个名字，可以是除了<code>span</code> 以外的任意字符串，网格线可以有多个名字。</p><pre><code>grid-template-columns: [first sidebar-start] 250px [content-start] 1fr [last];grid-template-rows: [first header-start] 100px [content-start] 1fr [footer-start] 100px [last];</code></pre><p><img src="/content/images/2017/03/Screen-Shot-2017-03-09-at-8-34-44-PM.png" alt><br><a href="https://igalia.github.io/css-grid-layout/named-grid-lines.html" target="_blank" rel="noopener">🌰</a></p><p>##<code>&lt;auto-track-list&gt;</code></p><pre><code>[ &lt;line-names&gt;? [ &lt;fixed-size&gt; | &lt;fixed-repeat&gt; ] ]* &lt;line-names&gt;? &lt;auto-repeat&gt;[ &lt;line-names&gt;? [ &lt;fixed-size&gt; | &lt;fixed-repeat&gt; ] ]* &lt;line-names&gt;?</code></pre><p><code>&lt;fixed-size&gt;</code></p><ol><li><code>&lt;fixed-breadth&gt;</code></li><li><code>minmax( &lt;fixed-breadth&gt; , &lt;track-breadth&gt; )</code></li><li><code>minmax( &lt;inflexible-breadth&gt; , &lt;fixed-breadth&gt; )</code></li></ol><p><code>&lt;fixed-repeat&gt;</code></p><pre><code>repeat( [ &lt;positive-integer&gt; ] , [ &lt;line-names&gt;? &lt;fixed-size&gt; ]+ &lt;line-names&gt;? )</code></pre><p><code>&lt;auto-repeat&gt;</code></p><pre><code>repeat( [ auto-fill | auto-fit ] , [ &lt;line-names&gt;? &lt;fixed-size&gt; ]+ &lt;line-names&gt;? )</code></pre><p><code>auto-fill</code> 生成尽可能多的列，以适应可用空间，而不会导致网格溢出。<br><code>auto-fit</code> 同上，区别在于将折叠任何空的重复轨道（这意味着它们的大小为0px）。</p><h2 id="grid-template-area"><a href="#grid-template-area" class="headerlink" title="grid-template-area"></a><code>grid-template-area</code></h2><pre><code>grid-template-areas: none | &lt;string&gt;+</code></pre><p>此属性指定命名网格区域，还提供了网格结构的可视化，使得网格容器的总体布局更容易理解。</p><h4 id="lt-string-gt"><a href="#lt-string-gt" class="headerlink" title="&lt;string&gt;+"></a><code>&lt;string&gt;+</code></h4><p>每个单独的字符串创建一个行，而字符串中的每个单词创建一个列。所有字符串必须具有相同数量的单词，否则声明无效。使用一个或多个’.’的序列（U + 002E FULL STOP）表示空单元，其是网格中的未命名区域。</p><pre><code>.grid-container {  display: grid;  grid-template-areas: &quot;logo stats&quot;                       &quot;score stats&quot;                       &quot;board board&quot;                       &quot;... controls&quot;;}.logo { grid-area: logo; }.score { grid-area: score; }.stats { grid-area: stats; }.board { grid-area: board; }.controls { grid-area: controls; }</code></pre><p><img src="/content/images/2017/03/Screen-Shot-2017-03-09-at-9-04-58-PM.png" alt></p><h2 id="grid-template"><a href="#grid-template" class="headerlink" title="grid-template"></a><code>grid-template</code></h2><pre><code>grid-template: none | [ &lt;‘grid-template-rows’&gt; / &lt;‘grid-template-columns’&gt; ] | [ &lt;line-names&gt;? &lt;string&gt; &lt;track-size&gt;? &lt;line-names&gt;? ]+ [ / &lt;explicit-track-list&gt; ]?</code></pre><p>把 &lt;‘grid-template-columns’&gt;, &lt;‘grid-template-rows’&gt; and &lt;‘grid-template-areas’&gt;放置在一个属性中描述</p><pre><code>grid-template: [header-top] &quot;a a a&quot; [header-bottom] [main-top] &quot;b b b&quot; 1fr [main-bottom] / auto 1fr auto;</code></pre><p>等于</p><pre><code>grid-template-areas: &quot;a a a&quot;                     &quot;b b b&quot;;grid-template-rows: [header-top] auto [header-bottom main-top] 1fr [main-bottom];grid-template-columns: auto 1fr auto;</code></pre><p><img src="/content/images/2017/03/Screen-Shot-2017-03-09-at-9-11-13-PM.png" alt></p><h2 id="grid-column-gap-和-grid-row-gap"><a href="#grid-column-gap-和-grid-row-gap" class="headerlink" title="grid-column-gap 和 grid-row-gap"></a><code>grid-column-gap</code> 和 <code>grid-row-gap</code></h2><pre><code>grid-column-gap: &lt;length&gt; | &lt;percentage&gt;grid-row-gap: &lt;length&gt; | &lt;percentage&gt;</code></pre><h2 id="grid-gap"><a href="#grid-gap" class="headerlink" title="grid-gap"></a><code>grid-gap</code></h2><pre><code>grid-gap: &lt;‘grid-row-gap’&gt; &lt;‘grid-column-gap’&gt;?</code></pre><p>若只声明grid-row-gap则grid-column-gap也为该值</p><h2 id="grid-auto-columns-和-grid-auto-rows"><a href="#grid-auto-columns-和-grid-auto-rows" class="headerlink" title="grid-auto-columns 和 grid-auto-rows"></a><code>grid-auto-columns</code> 和 <code>grid-auto-rows</code></h2><pre><code>grid-auto-columns: &lt;track-size&gt;+grid-auto-rows: &lt;track-size&gt;+</code></pre><p>当grid item的列或行未由&lt;’grid-template-columns’&gt;或&lt;’grid-template-rows’&gt;定义时，将创建隐含网格轨道以保存这些项。我们可以使用&lt;’grid-auto-columns’&gt;和&lt;’grid-auto-rows’&gt;属性来控制这些隐式网格轨道的大小。我们还可以为这些隐式网格轨道指定多个轨道大小。</p><pre><code>.grid {  display: grid;  grid-template-columns: 150px 150px;  grid-auto-columns: 50px 100px;}.item {  grid-column: 8;}</code></pre><p><img src="/content/images/2017/03/Screen-Shot-2017-03-09-at-9-24-57-PM.png" alt></p><h2 id="grid-auto-flow"><a href="#grid-auto-flow" class="headerlink" title="grid-auto-flow"></a><code>grid-auto-flow</code></h2><pre><code>grid-auto-flow: [ row | column ] | dense</code></pre><p>未明确定义放置在网格上的网格项，自动放置算法会自动放入这些项。此属性控制自动布置算法的工作原理。</p><p><code>row</code> 默认值，自动布置算法将通过填充每一行并根据需要添加新行来放置网格项。</p><p><code>column</code> 自动布置算法将通过填充每个列放置网格项，并根据需要添加新列</p><p><code>dense</code> 默认为稀松排列，该值设置为稠密排列，若设置则算法将尝试适合在网格中较早的填充”孔”。这将最小化网格中“孔”的发生率。<a href="https://igalia.github.io/css-grid-layout/autoplacement.html" target="_blank" rel="noopener">🌰</a></p><h2 id="grid"><a href="#grid" class="headerlink" title="grid"></a><code>grid</code></h2><pre><code>grid: &lt;‘grid-template’&gt; | &lt;‘grid-template-rows’&gt; / [ auto-flow &amp;&amp; dense? ] &lt;‘grid-auto-columns’&gt;? | [ auto-flow &amp;&amp; dense? ] &lt;‘grid-auto-rows’&gt;? / &lt;‘grid-template-columns’&gt;</code></pre><pre><code>&lt;‘grid-template-rows’&gt; / [ auto-flow &amp;&amp; dense? ] &lt;‘grid-auto-columns’&gt;?.grid {  grid: 50px 75px / auto-flow;}/* is equivalent to */.grid {  grid-template-rows: 50px 75px;  grid-template-columns: none; /* cannot be set explicitly with this syntax form */  grid-template-areas: none; /* cannot be set explicitly with this syntax form */  grid-auto-rows: auto; /* cannot be set explicitly with this syntax form */  grid-auto-columns: auto;  grid-auto-flow: column; /* can only set dense or not */  grid-column-gap: 0; /* cannot be set explicitly with this syntax form */  grid-row-gap: 0; /* cannot be set explicitly with this syntax form */}</code></pre><pre><code>[ auto-flow &amp;&amp; dense? ] &lt;‘grid-auto-rows’&gt;? / &lt;‘grid-template-columns’&gt;.grid {  grid: auto-flow dense / 30% 100px;}/* is equivalent to */.grid {  grid-template-rows: none; /* cannot be set explicitly with this syntax form */  grid-template-columns: 30% 100px;  grid-template-areas: none; /* cannot be set explicitly with this syntax form */  grid-auto-rows: auto;  grid-auto-columns: auto; /* cannot be set explicitly with this syntax form */  grid-auto-flow: row dense; /* can only set dense or not */  grid-column-gap: 0; /* cannot be set explicitly with this syntax form */  grid-row-gap: 0; /* cannot be set explicitly with this syntax form */}</code></pre><h2 id="justify-content"><a href="#justify-content" class="headerlink" title="justify-content"></a><code>justify-content</code></h2><pre><code>justify-content: center | start | end | space-between | space-around | space-evenly</code></pre><p><img src="/content/images/2017/03/justify-content.png" alt></p><p><code>space-around</code> 沿着行轴在网格容器内均匀分布网格轨道，使得每个网格轨道在其任一侧具有相等的空间，在任一端具有一半大小的空间。</p><p><code>space-between</code> 沿着行轴在网格容器内均匀地分布网格轨道，其中第一网格轨迹与网格容器的起始边缘齐平，并且最后一个网格轨迹与网格容器的结束边缘齐平。</p><p><code>space-evenly</code> 沿着行轴在网格容器内均匀分布网格轨道，使得任何2个相邻网格轨道之间的空间相同。</p><h2 id="align-content"><a href="#align-content" class="headerlink" title="align-content"></a><code>align-content</code></h2><pre><code>align-content: center | start | end | space-between | space-around | space-evenly</code></pre><h2 id="justify-items"><a href="#justify-items" class="headerlink" title="justify-items"></a><code>justify-items</code></h2><pre><code>justify-items: center | start | end | stretch</code></pre><p><img src="/content/images/2017/03/justify-items.png" alt></p><p><code>stretch</code> 默认，填充网格区域的宽度<br><a href="https://igalia.github.io/css-grid-layout/alignment-demo.html" target="_blank" rel="noopener">🌰</a></p><h2 id="align-items"><a href="#align-items" class="headerlink" title="align-items"></a><code>align-items</code></h2><pre><code>align-items: center | start | end | stretch</code></pre><h1 id="Grid-Items-属性"><a href="#Grid-Items-属性" class="headerlink" title="Grid Items 属性"></a>Grid Items 属性</h1><ul><li>grid-column-start</li><li>grid-column-end</li><li>grid-row-start</li><li>grid-row-end</li><li>grid-column</li><li>grid-row</li><li>grid-area</li><li>justify-self</li><li>align-self</li></ul><h2 id="grid-column-start-grid-column-end-and-grid-row-start-grid-row-end"><a href="#grid-column-start-grid-column-end-and-grid-row-start-grid-row-end" class="headerlink" title="grid-column-start, grid-column-end and grid-row-start, grid-row-end"></a><code>grid-column-start</code>, <code>grid-column-end</code> and <code>grid-row-start</code>, <code>grid-row-end</code></h2><p>通过参考特定的网格线来确定网格项中的网格位置。 grid-column-start / grid-row-start是item开始的网格线，grid-column-end / grid-row-end是item结束的网格线。</p><pre><code>grid-column-start: auto | &lt;custom-ident&gt; | [ &lt;integer&gt; &amp;&amp; &lt;custom-ident&gt;? ] | [ span &amp;&amp; [ &lt;integer&gt; || &lt;custom-ident&gt; ] ]grid-column-end: auto | &lt;custom-ident&gt; | [ &lt;integer&gt; &amp;&amp; &lt;custom-ident&gt;? ] | [ span &amp;&amp; [ &lt;integer&gt; || &lt;custom-ident&gt; ] ]grid-row-start: auto | &lt;custom-ident&gt; | [ &lt;integer&gt; &amp;&amp; &lt;custom-ident&gt;? ] | [ span &amp;&amp; [ &lt;integer&gt; || &lt;custom-ident&gt; ] ]grid-row-end: auto | &lt;custom-ident&gt; | [ &lt;integer&gt; &amp;&amp; &lt;custom-ident&gt;? ] | [ span &amp;&amp; [ &lt;integer&gt; || &lt;custom-ident&gt; ] ]</code></pre><p><code>auto</code> 默认值，没有为此属性指定网格线，因此项目将自动放置以填充网格，并且默认跨度为1。</p><p><code>&lt;custom-ident&gt;</code> 可以是网格线的数字索引，或命名的网格线。</p><p><code>[ &lt;integer&gt; &amp;&amp; &lt;custom-ident&gt;? ]</code> 对于重复命名的网格线，整数值n将定义具有指定名称的第n个网格线。整数值不能为0。<br><img src="/content/images/2017/03/Screen-Shot-2017-03-09-at-10-14-06-PM.png" alt></p><pre><code>.a { grid-column-start: 1 bar; grid-column-end: 3 foo; }.b { grid-column-start: 1 bar; }.c { grid-column-start: -1 foo; }</code></pre><p><code>[ span &amp;&amp; [ &lt;positive-integer&gt; || &lt;custom-ident&gt; ] ]</code> 提供指定网格项目的网格跨度的选项。此值与指定的网格线一起将确定网格项的位置。网格项将从指定的网格线跨越N个轨道。</p><p><img src="/content/images/2017/03/Screen-Shot-2017-03-09-at-10-17-55-PM.png" alt></p><pre><code>.item{   grid-column-start: span 2;   grid-column-end: 4;}</code></pre><p>如果 integer 不指定则默认为1</p><h2 id="grid-row-和-grid-column"><a href="#grid-row-和-grid-column" class="headerlink" title="grid-row 和 grid-column"></a><code>grid-row</code> 和 <code>grid-column</code></h2><pre><code>grid-row: &lt;grid-line&gt; [ / &lt;grid-line&gt; ]?grid-column: &lt;grid-line&gt; [ / &lt;grid-line&gt; ]?</code></pre><p>这是在同一声明中为相应维度设置起始行和结束行的缩写。 grid-row属性是grid-row-start和grid-row-end的缩写，而grid-column属性是grid-column-start和grid-column-end的缩写。<br>网格线值由斜杠分隔。斜线之前的值表示开始网格线，斜线后的值表示结束网格线。</p><h2 id="grid-area"><a href="#grid-area" class="headerlink" title="grid-area"></a><code>grid-area</code></h2><pre><code>grid-area: &lt;grid-line&gt; [ / &lt;grid-line&gt; ]{0,3}</code></pre><p>此缩写的顺序是row start / column-start / row-end / column-end</p><h2 id="justify-self🌰"><a href="#justify-self🌰" class="headerlink" title="justify-self🌰"></a><code>justify-self</code><a href="https://igalia.github.io/css-grid-layout/demo-alignment.html" target="_blank" rel="noopener">🌰</a></h2><pre><code>justify-self: center | start | end | stretch</code></pre><h2 id="align-self"><a href="#align-self" class="headerlink" title="align-self"></a><code>align-self</code></h2><pre><code>align-self: center | start | end | stretch</code></pre><h1 id="栗子"><a href="#栗子" class="headerlink" title="栗子"></a>栗子</h1><p>响应式布局</p><p><iframe height="265" scrolling="no" title="CSS-GRID-Responsive" src="//codepen.io/GGICE/embed/jBByzr/?height=265&theme-id=dark&default-tab=html,result&embed-version=2" frameborder="no" allowtransparency="true" allowfullscreen style="width:100%">See the Pen <a href="https://codepen.io/GGICE/pen/jBByzr/" target="_blank" rel="noopener">CSS-GRID-Responsive</a> by GGICE (<a href="http://codepen.io/GGICE" target="_blank" rel="noopener">@GGICE</a>) on <a href="http://codepen.io" target="_blank" rel="noopener">CodePen</a>.<br></iframe><br>经典blog界面</p><p><iframe height="265" scrolling="no" title="CSS-GRID-BLOG" src="//codepen.io/GGICE/embed/EWWZJR/?height=265&theme-id=dark&default-tab=html,result&embed-version=2" frameborder="no" allowtransparency="true" allowfullscreen style="width:100%">See the Pen <a href="http://codepen.io/GGICE/pen/EWWZJR/" target="_blank" rel="noopener">CSS-GRID-BLOG</a> by GGICE (<a href="http://codepen.io/GGICE" target="_blank" rel="noopener">@GGICE</a>) on <a href="http://codepen.io" target="_blank" rel="noopener">CodePen</a>.<br></iframe><br>在z轴上的布局</p><p><iframe height="265" scrolling="no" title="CSS-GRID-BLOG" src="https://igalia.github.io/css-grid-layout/z-index.html" style="width:100%;border:1px solid #000"><br></iframe></p><h1 id="参考"><a href="#参考" class="headerlink" title="参考"></a>参考</h1><p><a href="https://www.w3.org/TR/css-grid-1/" target="_blank" rel="noopener">CSS Grid Layout Module Level 1</a></p><p><a href="https://css-tricks.com/snippets/css/complete-guide-grid/" target="_blank" rel="noopener">css-tricks</a></p><p><a href="https://tympanus.net/codrops/css_reference/grid/" target="_blank" rel="noopener">Codrops CSS Reference</a></p><p><a href="https://igalia.github.io/css-grid-layout/" target="_blank" rel="noopener">Grid by Example</a></p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;p&gt;CSS Grid 一种二维布局系统, 最初草案于2011年4月发布，最初在IE10上实现，通过&lt;code&gt;-ms-&lt;/code&gt;使用。经过6年的探索和发展，17年有了较为稳定的候选版本，Firfox在52版本中实现了对&lt;a href=&quot;https://www.w3.org/
+      
+    
+    </summary>
+    
+    
+      <category term="web development" scheme="https://ice.gs/tags/web-development/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>Let&#39;s Encrypt 免费好用的 HTTPS 证书 （Raspberry pi）</title>
+    <link href="https://ice.gs/2016/10/08/lets-encrypt-mian-fei-hao-yong-de-https-zheng-shu-raspberry-pi/"/>
+    <id>https://ice.gs/2016/10/08/lets-encrypt-mian-fei-hao-yong-de-https-zheng-shu-raspberry-pi/</id>
+    <published>2016-10-08T05:24:36.000Z</published>
+    <updated>2017-05-16T07:33:04.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>Let’s Encrypt 被称为个人HTTPS的最佳解决方案，得到Mozilla、CISCO、Chrome、Facebook 等众多企业组织的支持。Let’s Encrypt 也提供一套简单的HTTPS配置方案。</p><p><img src="/content/images/2016/10/-----2016-10-09---12-12-37.png" alt></p><p>本文简单分享下安装 Let’s Encrypt HTTPS证书过程，机器为Raspberry pi 3 ，系统为 Debian7，服务器软件为Nginx。</p><h2 id="安装-cerbot-auto"><a href="#安装-cerbot-auto" class="headerlink" title="安装 cerbot-auto"></a>安装 cerbot-auto</h2><p>cerbot-auto 是 Let’s Encrypt 的自动化安装工具。</p><pre><code>wget https://dl.eff.org/certbot-auto  chmod a+x certbot-auto</code></pre><h2 id="使用"><a href="#使用" class="headerlink" title="使用"></a>使用</h2><p>待安装完成之后</p><pre><code>./certbot-auto certonly --standalone -d x21.xyz -d center.x21.xyz</code></pre><p>-d 之后是跟随配置域名，子域名可使用多个-d ，Let’s Encrypt 不支持泛域名所以要设置每一个子域名, 回车后将会出现图形界面，输入邮箱等设置信息。</p><p>注意： 使用前记得停掉Nginx，其他占用80或者443端口的程序也需要停掉，certbot-auto 认证需要这两个端口。</p><h2 id="配置nginx"><a href="#配置nginx" class="headerlink" title="配置nginx"></a>配置nginx</h2><p>center.x21.xyz 域名的配置实例</p><pre><code>server {    listen 80;    listen [::]:80;    server_name center.x21.xyz;    return 301 https://$host$request_uri;}server {    listen 443 ssl;    listen [::]:443 ssl;    server_name center.x21.xyz;    ssl_certificate /path/fullchain.pem; #生成的fullchain.pem 路径    ssl_certificate_key /path/privkey.pem; #生成的privkey.pem 路径    ssl_session_timeout 1d;    ssl_session_cache shared:SSL:50m;    #ssl_session_tickets off;    ssl_dhparam /etc/nginx/ssl/dhparam.pem;    # dhparam.pem 生成方法    # $ sudo mkdir /etc/nginx/ssl    # $ sudo openssl dhparam -out /etc/nginx/ssl/dhparam.pem 2048    ssl_protocols TLSv1 TLSv1.1 TLSv1.2;    ssl_ciphers &#39;ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-A    ES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-SHA384:ECDHE-ECDSA-A    ES256-SHA:ECDHE-RSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA:ECDHE-ECDSA-DES-CBC3-SHA:ECDHE-RSA-DES-CBC3-SHA:EDH-RSA-DES-CBC3-SHA:AES128-GCM-SHA256:    AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:DES-CBC3-SHA:!DSS&#39;;    ssl_prefer_server_ciphers on;    add_header Strict-Transport-Security max-age=15768000;    ssl_stapling on;    ssl_stapling_verify on;    resolver 8.8.8.8 8.8.4.4;    location / {            proxy_set_header   X-Real-IP $remote_addr;            proxy_set_header   Host      $http_host;            proxy_pass         http://127.0.0.1:9901;    }}</code></pre><h2 id="HTTPS-配置文件生成器"><a href="#HTTPS-配置文件生成器" class="headerlink" title="HTTPS 配置文件生成器"></a>HTTPS 配置文件生成器</h2><p>Mozilla 有一个HTTPS配置文件的生成器<a href="https://mozilla.github.io/server-side-tls/ssl-config-generator/" target="_blank" rel="noopener">Mozilla SSL Configuration Generator</a></p><p>上面的nginx便是配置借鉴Mozilla SSL Configuration Generator，但是nginx version: nginx/1.6.2, 一些特性并不支持，删减了一些配置 (一些nginx配置并不了解用途😭)。</p><h2 id="测试HTTPS配置，评分"><a href="#测试HTTPS配置，评分" class="headerlink" title="测试HTTPS配置，评分"></a>测试HTTPS配置，评分</h2><p><a href="https://www.ssllabs.com/ssltest/index.html" target="_blank" rel="noopener">Qualys SSL Labs</a>提供了全面的 SSL 检测和评级，可以根据评测报告修改HTTPS配置。</p><p>上面的配置已经获得了A+</p><p><img src="/content/images/2016/10/-----2016-10-09---12-14-31.png" alt></p><h2 id="自动更新证书"><a href="#自动更新证书" class="headerlink" title="自动更新证书"></a>自动更新证书</h2><p>Let’s Encrypt 证书的期限是3个月，到期之后需要续期，借助cerbot-auto工具可以实现自动更新。</p><p>使用 crontab 配置自动任务</p><pre><code>sudo crontab -e</code></pre><p>添加以下内容</p><pre><code>56 0,3 * * * /usr/bin/certbot renew --quiet --no-self-upgrade</code></pre><p>每天0点和3点执行一次更新证书命令 （cerbot-auto 推荐每天检查两次）</p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;p&gt;Let’s Encrypt 被称为个人HTTPS的最佳解决方案，得到Mozilla、CISCO、Chrome、Facebook 等众多企业组织的支持。Let’s Encrypt 也提供一套简单的HTTPS配置方案。&lt;/p&gt;&lt;p&gt;&lt;img src=&quot;/content/imag
+      
+    
+    </summary>
+    
+    
+      <category term="soft" scheme="https://ice.gs/tags/soft/"/>
+    
+      <category term="linux" scheme="https://ice.gs/tags/linux/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>查找MAC硬盘空间占用，清理</title>
+    <link href="https://ice.gs/2016/08/20/cha-zhao-macying-pan-kong-jian-zhan-yong-qing-li/"/>
+    <id>https://ice.gs/2016/08/20/cha-zhao-macying-pan-kong-jian-zhan-yong-qing-li/</id>
+    <published>2016-08-19T22:39:52.000Z</published>
+    <updated>2016-10-08T18:23:15.000Z</updated>
+    
+    <content type="html"><![CDATA[<h2 id="2016年10月09日10-21-22-更新："><a href="#2016年10月09日10-21-22-更新：" class="headerlink" title="2016年10月09日10:21:22 更新："></a>2016年10月09日10:21:22 更新：</h2><p>Macos sierra 10.12 版本之后，已经自带硬盘空间管理工具！</p><h2 id="OLD"><a href="#OLD" class="headerlink" title="OLD"></a>OLD</h2><p>之前在知乎上看到的方法，在每次128G MAC硬盘告急的时候，屡试不爽。</p><p>ncdu 是一个可以查看目录下所有文件文件夹大小，并提供完整统计结果的软件。所以我们可以根据ncdu的统计结果找出我们磁盘空间都被那些占用了，然后删除那些无关紧要的，回收空间。</p><ol><li><p>安装 ncdu</p><p>brew install ncdu</p></li></ol><ol start="2"><li><p>检索所有目录</p><p>cd /<br>sudo ncdu</p></li></ol><ol start="3"><li><p>等待结果</p><p>可能需要经过漫长时间（几十分钟）的等待，ncdu会检索所有文件完成。</p></li></ol>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;h2 id=&quot;2016年10月09日10-21-22-更新：&quot;&gt;&lt;a href=&quot;#2016年10月09日10-21-22-更新：&quot; class=&quot;headerlink&quot; title=&quot;2016年10月09日10:21:22 更新：&quot;&gt;&lt;/a&gt;2016年10月09日10:21:
+      
+    
+    </summary>
+    
+    
+      <category term="os" scheme="https://ice.gs/tags/os/"/>
+    
+      <category term="Mac os X" scheme="https://ice.gs/tags/Mac-os-X/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>模拟Contextmenu事件</title>
+    <link href="https://ice.gs/2016/08/20/mo-ni-contextmenushi-jian/"/>
+    <id>https://ice.gs/2016/08/20/mo-ni-contextmenushi-jian/</id>
+    <published>2016-08-19T22:15:35.000Z</published>
+    <updated>2016-08-19T22:31:37.000Z</updated>
+    
+    <content type="html"><![CDATA[<h2 id="新建一个鼠标事件并初始化"><a href="#新建一个鼠标事件并初始化" class="headerlink" title="新建一个鼠标事件并初始化"></a>新建一个鼠标事件并初始化</h2><pre><code>var myEvt = document.createEvent(&#39;MouseEvents&#39;);myEvt.initMouseEvent(  &#39;click&#39;          // event type  ,true           // can bubble?  ,true           // cancelable?  ,window      // the event&#39;s abstract view (should always be window)  ,1              // mouse click count (or event &quot;detail&quot;)  ,100           // event&#39;s screen x coordinate  ,200           // event&#39;s screen y coordinate  ,100           // event&#39;s client x coordinate  ,200           // event&#39;s client y coordinate  ,false         // whether or not CTRL was pressed during event  ,false         // whether or not ALT was pressed during event  ,false         // whether or not SHIFT was pressed during event  ,false         // whether or not the meta key was pressed during event  ,1             // indicates which button (if any) caused the mouse event (1 =      primary button) ,null          // relatedTarget (only applicable for mouseover/mouseout events));</code></pre><h2 id="使用伪造的事件"><a href="#使用伪造的事件" class="headerlink" title="使用伪造的事件"></a>使用伪造的事件</h2><p>当我们有了伪造的Event之后我们就可以去主动触发某个元素的的contentMenu事件，然后传入该Event。<br>当然不仅仅是contentMenu事件可以模拟触发。</p><h2 id="拓展阅读"><a href="#拓展阅读" class="headerlink" title="拓展阅读"></a>拓展阅读</h2><p><a href="https://developer.mozilla.org/en-US/docs/Web/API/Document/createEvent" target="_blank" rel="noopener">document.createEvent</a></p><p><a href="https://developer.mozilla.org/en-US/docs/Web/Guide/Events/Creating_and_triggering_events" target="_blank" rel="noopener">Creating_and_triggering_events</a></p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;h2 id=&quot;新建一个鼠标事件并初始化&quot;&gt;&lt;a href=&quot;#新建一个鼠标事件并初始化&quot; class=&quot;headerlink&quot; title=&quot;新建一个鼠标事件并初始化&quot;&gt;&lt;/a&gt;新建一个鼠标事件并初始化&lt;/h2&gt;&lt;pre&gt;&lt;code&gt;var myEvt = document.c
+      
+    
+    </summary>
+    
+    
+      <category term="web development" scheme="https://ice.gs/tags/web-development/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>Linux 下类Alfred应用Mutate</title>
+    <link href="https://ice.gs/2016/05/07/li/"/>
+    <id>https://ice.gs/2016/05/07/li/</id>
+    <published>2016-05-06T23:43:18.000Z</published>
+    <updated>2016-05-07T00:28:06.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>Mutate是一款类似Mac os x 下面Alfred的程序，对于转战Linux的 Mac党这款应用必不可少。</p><p><img src="/content/images/2016/05/af.png" alt></p><p>貌似是国人开发的，也是开源的。</p><p><a href="https://github.com/qdore/Mutate" target="_blank" rel="noopener">GITHUB地址</a></p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;p&gt;Mutate是一款类似Mac os x 下面Alfred的程序，对于转战Linux的 Mac党这款应用必不可少。&lt;/p&gt;&lt;p&gt;&lt;img src=&quot;/content/images/2016/05/af.png&quot; alt&gt;&lt;/p&gt;&lt;p&gt;貌似是国人开发的，也是开源的。&lt;/p&gt;&lt;p
+      
+    
+    </summary>
+    
+    
+      <category term="soft" scheme="https://ice.gs/tags/soft/"/>
+    
+      <category term="linux" scheme="https://ice.gs/tags/linux/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>ubuntu 下安装 photoshop cs6 || cc</title>
+    <link href="https://ice.gs/2016/05/07/ubuntu-xia-an-zhuang-photoshop-cs6/"/>
+    <id>https://ice.gs/2016/05/07/ubuntu-xia-an-zhuang-photoshop-cs6/</id>
+    <published>2016-05-06T23:25:09.000Z</published>
+    <updated>2016-05-06T23:40:27.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>根据wine官网的说明，在wine1.9.8 的版本是可以安装photoshop cc的。<a href="https://appdb.winehq.org/objectManager.php?sClass=version&amp;iId=29832&amp;iTestingId=83387" target="_blank" rel="noopener">这里</a>有官方的安装说明。</p><p><img src="/content/images/2016/05/2016-05-07-15-38-15-----.png" alt></p><h2 id="安装篇"><a href="#安装篇" class="headerlink" title="安装篇"></a>安装篇</h2><ol><li><p>安装wine 1.9</p><pre><code> sudo add-apt-repository ppa:wine/wine-builds sudo apt-get update sudo apt-get install --install-recommends wine-staging sudo apt-get install winehq-staging</code></pre></li></ol><p>之后可以按照官方的说法继续</p><ol><li>Installed “Adobe Application Manager” from <a href="http://www.adobe.com/support/downloads/detail.jsp?ftpID=4773" target="_blank" rel="noopener">http://www.adobe.com/support/downloads/detail.jsp?ftpID=4773</a></li><li>Started Adobe Application Manager -&gt; Waiting for the update -&gt; Login with adobe account -&gt; Shows only Photoshop CS6.</li><li>Closed all instanced, run winecfg, set os to “Windows 7” (was XP on default)下载好</li><li>Started the Application Manager -&gt; Now shows Photoshop CC</li><li>Installed Photoshop CC Via Application Manager<br>(Optional components fail to install - however photoshop runs perfectly without that)</li><li>Start Photoshop.exe with wine.</li></ol><p>我是直接，在第2. 直接安装了Photoshop CS6 因为个人来讲cs6 已经够我用的了，Adobe Application Manager 会直接把cs6下载好然后自动安装好，之后就可以在wine菜单中找的cs6的图标，直接点击就可以打开。</p><h2 id="激活篇"><a href="#激活篇" class="headerlink" title="激活篇"></a>激活篇</h2><p>其实激活方法和Window找到cs6安装目录，然后…</p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;p&gt;根据wine官网的说明，在wine1.9.8 的版本是可以安装photoshop cc的。&lt;a href=&quot;https://appdb.winehq.org/objectManager.php?sClass=version&amp;amp;iId=29832&amp;amp;iTestin
+      
+    
+    </summary>
+    
+    
+      <category term="soft" scheme="https://ice.gs/tags/soft/"/>
+    
+      <category term="linux" scheme="https://ice.gs/tags/linux/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>Linux mkdown编辑器 Haroopad</title>
+    <link href="https://ice.gs/2016/04/01/ubuntu-mkdownbian-ji-qi/"/>
+    <id>https://ice.gs/2016/04/01/ubuntu-mkdownbian-ji-qi/</id>
+    <published>2016-03-31T22:53:15.000Z</published>
+    <updated>2016-05-06T23:43:06.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>Haroopad 是一款跨平台的mkdown编辑器，难得的一款支持Linux系统的编辑器。界面简介，功能丰富，中文支持良好。</p><p><img src="/content/images/2016/05/2016-05-07-14-44-52-----.png" alt></p><p><a href="http://pad.haroopress.com" target="_blank" rel="noopener">官网</a></p><p><a href="http://pad.haroopress.com/user.html" target="_blank" rel="noopener">下载地址</a></p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;p&gt;Haroopad 是一款跨平台的mkdown编辑器，难得的一款支持Linux系统的编辑器。界面简介，功能丰富，中文支持良好。&lt;/p&gt;&lt;p&gt;&lt;img src=&quot;/content/images/2016/05/2016-05-07-14-44-52-----.png&quot; alt&gt;
+      
+    
+    </summary>
+    
+    
+      <category term="soft" scheme="https://ice.gs/tags/soft/"/>
+    
+      <category term="linux" scheme="https://ice.gs/tags/linux/"/>
+    
+      <category term="os" scheme="https://ice.gs/tags/os/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>HTTP 缓存</title>
+    <link href="https://ice.gs/2016/02/24/http-huan-cun/"/>
+    <id>https://ice.gs/2016/02/24/http-huan-cun/</id>
+    <published>2016-02-23T20:23:39.000Z</published>
+    <updated>2016-02-23T22:02:25.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>现在的网络环境相比以前已经变得很好，其实不是太大的网页应用，不是运行在4G以下模式的手机上，一些速度优化的作用越来越少，一些沿用很久的优化理论可能已经不实用。</p><p>我希望提供更多具有时代意义的优化建议，本文主要借鉴<a href="https://developers.google.com/web/fundamentals/performance/optimizing-content-efficiency/http-caching?hl=zh-cn" target="_blank" rel="noopener">这篇</a> 文章的优化建议。</p><h2 id="良好的HTTP缓存"><a href="#良好的HTTP缓存" class="headerlink" title="良好的HTTP缓存"></a>良好的HTTP缓存</h2><h3 id="1-使用Etag-验证缓存的相应"><a href="#1-使用Etag-验证缓存的相应" class="headerlink" title="1.使用Etag 验证缓存的相应"></a>1.使用Etag 验证缓存的相应</h3><p>ETag的原理是，在请求文件时，服务器会生成并返回一个随机令牌（一般为文件哈希值）。客户端在下次请求时将令牌发送给服务器，如果令牌一致，则跳过下载。</p><p>客户端会先校验ETag若相应未被修改，则在延用Cache-Control的设置时间。</p><p>在HTML5 Boilerplate中给出了流行服务器的<a href="https://github.com/h5bp/server-configs" target="_blank" rel="noopener">配置样例</a>。</p><h3 id="2-确定网站的最佳缓存层级"><a href="#2-确定网站的最佳缓存层级" class="headerlink" title="2.确定网站的最佳缓存层级"></a>2.确定网站的最佳缓存层级</h3><h4 id="Cache-Control"><a href="#Cache-Control" class="headerlink" title="Cache-Control"></a>Cache-Control</h4><blockquote><p>每个资源都可以通过 Cache-Control HTTP 头来定义自己的缓存策略<br>Cache-Control 指令控制谁在什么条件下可以缓存响应以及可以缓存多久</p></blockquote><p><a href="https://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.9" target="_blank" rel="noopener">Cache-Control W3c描述文档</a></p><blockquote><p>Cache-Control 头在 HTTP/1.1 规范中定义，取代了之前用来定义响应缓存策略的头（例如 Expires）。当前的所有浏览器都支持 Cache-Control，因此，使用它就够了。</p></blockquote><p>默认请求资源会被缓存的，我们可以通过设置来修改是否缓存和明确缓存方式。</p><p>no-cache 表示必须咸鱼服务器确认返回的相应是否被更改,然后才能使用该响应来满足后续的请求。如果设置了验证令牌，no-cache会发起往返通讯来验证缓存的响应，如果未更改，则不下载。</p><p>no-store 直接禁止浏览器和所有中继缓存（CDN）返回的任何版本的响应，每次都会下载完整的响应。</p><p>public 表示即使有关联的http认证，甚至响应状态码无法正常缓存，响应也可以被缓存，大多数情况下，public不是必须的，因为明确的缓存信息（如max-age）已表示响应可以被缓存。</p><p>private 表示浏览器可以缓存private的响应，但是通常只为单个用户缓存，因此不允许任何中继缓存（如CDN）对其进行缓存。</p><p>max-age 该指令指定从当前请求开始，允许获取的响应被重用的最长时间（单位为秒）。</p><h4 id="缓存的层级关系"><a href="#缓存的层级关系" class="headerlink" title="缓存的层级关系"></a>缓存的层级关系</h4><p>下面这张图展示缓存的作用层级关系<br><img src="/content/images/2016/02/http-cache-decision-tree-1.png" alt></p><h4 id="设置合理的缓存级别"><a href="#设置合理的缓存级别" class="headerlink" title="设置合理的缓存级别"></a>设置合理的缓存级别</h4><p>对于网页应用我们既有缓存来优化加载，又希望我们的更新能使用户立即获得，对于一些大型的网页应用，在大的版本迭代中，若不能配合server及时更新前端代码，还可能造成应用无法使用的情况。</p><p><img src="/content/images/2016/02/http-cache-hierarchy.png" alt></p><ul><li><p>这是一个典型的层级加载优化事例，在入口的Html文件我们设置no-cache，这意味着每次请求时都会重新验证文档，若内容改变，会获取最新的版本。同时若css，js文件修改，通过指纹码修改css和js文件的文件名，入口的Html文件会随之更新，下载新的版本。</p></li><li><p>允许浏览器中继缓存 css 过期时间设置为1年。这是我们可以放心设置较长的时间，因为css的更新会同时更新网址，保证立即更新。</p></li><li><p>JavaScript 过期时间也设置为一年，但是被标记为private, 因为JavaScript可能包含一些个人数据，但是一般情况情况下private也是不需要的。</p></li><li>缓存图片是不包含版本或指纹码，过期时间设为一天。 这样做是会存在风险图片不能及时更新，例如css引用的图片更新，为了及时更新我们也需要给图片添加指纹码，之后我们可以放心的设置较长的缓存时间。</li></ul><h2 id="其他优化"><a href="#其他优化" class="headerlink" title="其他优化"></a>其他优化</h2><ul><li>同一资源使用相同的网址</li><li>利用CDN等中继缓存常用公共资源</li><li>更新最小化，经常更新的部分，考虑单独拉出文件，仅作这部分更新</li></ul><h2 id="问题-amp-BUG"><a href="#问题-amp-BUG" class="headerlink" title="问题&amp;BUG"></a>问题&amp;BUG</h2><p>上面所讲的理论在实践中，在不同浏览器、webview中并不一定如我们所愿的那样运作。可能会出现各种各样关于缓存的问题。在遇到具体问题时，会在下文具体分析解决。</p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;p&gt;现在的网络环境相比以前已经变得很好，其实不是太大的网页应用，不是运行在4G以下模式的手机上，一些速度优化的作用越来越少，一些沿用很久的优化理论可能已经不实用。&lt;/p&gt;&lt;p&gt;我希望提供更多具有时代意义的优化建议，本文主要借鉴&lt;a href=&quot;https://developer
+      
+    
+    </summary>
+    
+    
+      <category term="web development" scheme="https://ice.gs/tags/web-development/"/>
+    
+      <category term="web development推荐方法" scheme="https://ice.gs/tags/web-development%E6%8E%A8%E8%8D%90%E6%96%B9%E6%B3%95/"/>
+    
+  </entry>
+  
+  <entry>
+    <title>JavaScript 内存管理和优化</title>
+    <link href="https://ice.gs/2016/02/22/javascript-nei-cun-guan-li-he-you-hua/"/>
+    <id>https://ice.gs/2016/02/22/javascript-nei-cun-guan-li-he-you-hua/</id>
+    <published>2016-02-22T15:30:36.000Z</published>
+    <updated>2016-02-22T15:33:37.000Z</updated>
+    
+    <content type="html"><![CDATA[<h3 id="内存的生命周期"><a href="#内存的生命周期" class="headerlink" title="内存的生命周期"></a>内存的生命周期</h3><ol><li>创建对象分配所需内存</li><li>使用该对象</li><li>当不被使用时释放</li></ol><h3 id="老的垃圾回收机制"><a href="#老的垃圾回收机制" class="headerlink" title="老的垃圾回收机制"></a>老的垃圾回收机制</h3><p>老式的浏览器采用<code>引用计数算法垃圾回收</code>，对于循环引用的对象无法回收，已经基本废弃，这里不做讨论。</p><h3 id="现代浏览器垃圾回收机制"><a href="#现代浏览器垃圾回收机制" class="headerlink" title="现代浏览器垃圾回收机制"></a>现代浏览器垃圾回收机制</h3><p>现代浏览器采用<code>标记-清除算法垃圾回收</code>。这个算法，根据对象是否可以获得来确定是否回收。</p><p>算法设置一个根对象，定时从根对象开始，查找所有根开始引用的对象，然后逐级向下查找，确定所有可以获得对象和所有无法获得的对象。</p><p>这个算法解决了循环引用无法回收的问题，问题是无法被查询到的对象都会删除，可能存在小概率的误删。</p><h3 id="主动内存回收"><a href="#主动内存回收" class="headerlink" title="主动内存回收"></a>主动内存回收</h3><pre><code>var a = { some code }a = null //a对象内存将会被回收</code></pre><p>对于一些mvc框架，会主动控制视图或者控制器的生命周期，完成业务逻辑和提高运行效率。</p><h3 id="内存诊断工具"><a href="#内存诊断工具" class="headerlink" title="内存诊断工具"></a>内存诊断工具</h3><p>Chrome 的 Profiler</p><h3 id="V8-引擎的垃圾回收"><a href="#V8-引擎的垃圾回收" class="headerlink" title="V8 引擎的垃圾回收"></a>V8 引擎的垃圾回收</h3><p><a href="http://alinode.aliyun.com/blog/14" target="_blank" rel="noopener">这里</a>有篇文章介绍v8引擎的垃圾回收机制</p><h3 id="代码优化"><a href="#代码优化" class="headerlink" title="代码优化"></a>代码优化</h3><h4 id="善用函数"><a href="#善用函数" class="headerlink" title="善用函数"></a>善用函数</h4><p>使用匿名包裹页面，可以利于内存的回收。</p><pre><code>;(function() {  // 主业务代码})();</code></pre><h4 id="避免全局变量"><a href="#避免全局变量" class="headerlink" title="避免全局变量"></a>避免全局变量</h4><p>默认情况下，全局变量是不会被回收的。</p><h4 id="主动解除引用"><a href="#主动解除引用" class="headerlink" title="主动解除引用"></a>主动解除引用</h4><p>对于，明确的业务流程可以在恰当的时间，主动解除变量引用来，使得被回收。</p><h4 id="良好的闭包管理"><a href="#良好的闭包管理" class="headerlink" title="良好的闭包管理"></a>良好的闭包管理</h4><p>这里的largeStr 并不会被回收</p><pre><code>var a = function () {    var largeStr = new Array(1000000).join(&#39;x&#39;);    return function () {        return largeStr;    };}();</code></pre><p>这里的largeStr 是会被回收的</p><pre><code>var a = function () {    var smallStr = &#39;x&#39;;    var largeStr = new Array(1000000).join(&#39;x&#39;);    return function (n) {        return smallStr;    };}();</code></pre><p>所以在闭包的使用时，应该合理的设置返回值，并且关注返回值的回收。</p>]]></content>
+    
+    <summary type="html">
+    
+      
+      
+        &lt;h3 id=&quot;内存的生命周期&quot;&gt;&lt;a href=&quot;#内存的生命周期&quot; class=&quot;headerlink&quot; title=&quot;内存的生命周期&quot;&gt;&lt;/a&gt;内存的生命周期&lt;/h3&gt;&lt;ol&gt;&lt;li&gt;创建对象分配所需内存&lt;/li&gt;&lt;li&gt;使用该对象&lt;/li&gt;&lt;li&gt;当不被使用时释放&lt;/li
+      
+    
+    </summary>
+    
+    
+      <category term="web development" scheme="https://ice.gs/tags/web-development/"/>
+    
+      <category term="web development推荐方法" scheme="https://ice.gs/tags/web-development%E6%8E%A8%E8%8D%90%E6%96%B9%E6%B3%95/"/>
+    
+  </entry>
+  
+</feed>
