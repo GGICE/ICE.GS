@@ -8,10 +8,6 @@ comments: true
 
 I am GGICE， a web front-end development engineer, [ICE.GS](https://ice.gs) is my blog.
 
-## Something fun
-
-[x21.xyz](http://x21.xyz)
-
 ## Contact me
 
 Email: i@ice.gs
